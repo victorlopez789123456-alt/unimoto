@@ -103,7 +103,8 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
    ========================================================= */
 const CONFIG = {
   SUPABASE_URL: "https://wptknyzadqtadcfxhltf.supabase.co",
-  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ3cHRrbnl6YWRxdGFkY2Z4aGx0ZiIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzg3NzY4OTU5LCJleHAiOjIxMDMzNDQ5NTl9.xQLqYc0lOZLz9HR2WMifxs1t1V95cEeshOFt-kTUxq4",
+  SUPABASE_PUBLISHABLE_KEY: "sb_publishable_i4szch1dJd6pso-VcnaGeQ_mZNFzNBE",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwdGtueXphZHF0YWRjZnhobHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3Njg5NTksImV4cCI6MjEwMzM0NDk1OX0.xQLqYc0lOZLz9HR2WMifxs1t1V95cEeshOFt-kTUxq4",
   APP_NAME: "MotoGo",
   ADMIN_USER: "admin",
   ADMIN_PIN: "12",
@@ -124,10 +125,10 @@ const SETUP_SQL = String.raw`-- ================================================
 -- Proyecto: https://wptknyzadqtadcfxhltf.supabase.co
 --
 -- IMPORTANTE:
--- 1) Este script BORRA las tablas de MotoGo y los objetos de los
---    buckets indicados. Úsalo solo en un proyecto que quieras dejar limpio.
--- 2) NO borra auth.users: las cuentas de Supabase Auth se conservan.
--- 3) Después de ejecutar este SQL, crea al menos un usuario admin en
+-- 1) Este script BORRA las tablas de MotoGo para una instalación limpia.
+-- 2) NO borra objetos ni buckets de Storage desde SQL; Storage se gestiona por API/Dashboard.
+-- 3) NO borra auth.users: las cuentas de Supabase Auth se conservan.
+-- 4) Después de ejecutar este SQL, crea al menos un usuario admin en
 --    Supabase Auth y ejecuta la función de bootstrap incluida abajo.
 -- ============================================================
 
@@ -176,9 +177,9 @@ drop function if exists public.record_driver_location(uuid,double precision,doub
 drop function if exists public.bootstrap_admin(uuid,text) cascade;
 drop function if exists public.handle_new_user() cascade;
 
--- Limpieza de los buckets de MotoGo. No afecta otros buckets.
-delete from storage.objects where bucket_id in ('driver-documents','delivery-proofs','profiles','media');
-delete from storage.buckets where id in ('driver-documents','delivery-proofs','profiles','media');
+-- No se eliminan objetos ni buckets de Storage desde SQL.
+-- Supabase protege storage.objects contra DELETE directo.
+-- Los objetos se gestionan mediante Storage API o Dashboard > Storage.
 
 -- ------------------------------------------------------------
 -- 1. FUNCIONES AUXILIARES
@@ -1249,9 +1250,22 @@ commit;
 
 let supa = null;
 try {
-  if(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY && !CONFIG.SUPABASE_ANON_KEY.includes("REPLACE_WITH"))
-    supa = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY, {auth:{persistSession:true,autoRefreshToken:true}});
+  const supabaseKey = CONFIG.SUPABASE_PUBLISHABLE_KEY || CONFIG.SUPABASE_ANON_KEY;
+  if(CONFIG.SUPABASE_URL && supabaseKey && !supabaseKey.includes("REPLACE_WITH")) {
+    supa = window.supabase.createClient(CONFIG.SUPABASE_URL, supabaseKey, {
+      auth:{persistSession:true,autoRefreshToken:true},
+      realtime:{params:{eventsPerSecond:10}}
+    });
+  }
 } catch(e){ console.warn("Supabase no disponible",e); }
+
+async function checkSupabaseConnection(){
+  if(!supa) return {ok:false,reason:"Cliente Supabase no inicializado"};
+  try {
+    const {error}=await supa.from("categories").select("id",{head:true,count:"exact"});
+    return error ? {ok:false,reason:error.message} : {ok:true};
+  } catch(e){ return {ok:false,reason:e?.message||String(e)}; }
+}
 
 const LS = {
   session:"motogo_session_v1", demo:"motogo_demo_v1", faceDay:"motogo_face_day_v1",
