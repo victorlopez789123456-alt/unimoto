@@ -118,22 +118,242 @@ const CONFIG = {
    SQL DE INSTALACIÓN (copiar/pegar en Supabase SQL Editor)
    Se incluye dentro del HTML para mantener un único archivo.
    ========================================================= */
-const SETUP_SQL = String.raw`
+const SETUP_SQL = String.raw`-- ============================================================
+-- MOTOGO — INSTALACIÓN LIMPIA
+-- Supabase Auth + RLS + Storage + Realtime
+-- Proyecto: https://njfweuwbceezwhadomze.supabase.co
+--
+-- IMPORTANTE:
+-- 1) Este script BORRA las tablas de MotoGo y los objetos de los
+--    buckets indicados. Úsalo solo en un proyecto que quieras dejar limpio.
+-- 2) NO borra auth.users: las cuentas de Supabase Auth se conservan.
+-- 3) Después de ejecutar este SQL, crea al menos un usuario admin en
+--    Supabase Auth y ejecuta la función de bootstrap incluida abajo.
+-- ============================================================
+
+begin;
+
 create extension if not exists pgcrypto;
 
-create table if not exists public.app_sessions(
+-- ------------------------------------------------------------
+-- 0. LIMPIEZA DEL ESQUEMA ANTERIOR DE MOTOGO
+-- ------------------------------------------------------------
+
+drop table if exists public.app_sessions cascade;
+drop table if exists public.audit_log cascade;
+drop table if exists public.notifications cascade;
+drop table if exists public.push_subscriptions cascade;
+drop table if exists public.driver_documents cascade;
+drop table if exists public.media_assets cascade;
+drop table if exists public.driver_locations cascade;
+drop table if exists public.payments cascade;
+drop table if exists public.messages cascade;
+drop table if exists public.chat_participants cascade;
+drop table if exists public.chat_threads cascade;
+drop table if exists public.service_status_history cascade;
+drop table if exists public.service_assignments cascade;
+drop table if exists public.services cascade;
+drop table if exists public.tariffs cascade;
+drop table if exists public.driver_category_rules cascade;
+drop table if exists public.categories cascade;
+drop table if exists public.clients cascade;
+drop table if exists public.drivers cascade;
+drop table if exists public.app_roles cascade;
+drop table if exists public.profiles cascade;
+
+drop function if exists public.set_updated_at() cascade;
+drop function if exists public.resolve_login(text,text) cascade;
+drop function if exists public.create_client(text,text,text,text) cascade;
+drop function if exists public.create_driver(text,text,text,text,text,text,text,text,text) cascade;
+drop function if exists public.get_tariff(text,text) cascade;
+drop function if exists public.create_service(text,text,text,double precision,double precision,text,text,double precision,double precision,text,text,numeric) cascade;
+drop function if exists public.accept_service(uuid) cascade;
+drop function if exists public.start_service(uuid) cascade;
+drop function if exists public.complete_service(uuid,text,text) cascade;
+drop function if exists public.cancel_service(uuid,text) cascade;
+drop function if exists public.set_driver_status(text) cascade;
+drop function if exists public.record_driver_location(uuid,double precision,double precision,double precision,double precision,double precision) cascade;
+drop function if exists public.bootstrap_admin(uuid,text) cascade;
+drop function if exists public.handle_new_user() cascade;
+
+-- Limpieza de los buckets de MotoGo. No afecta otros buckets.
+delete from storage.objects where bucket_id in ('driver-documents','delivery-proofs','profiles','media');
+delete from storage.buckets where id in ('driver-documents','delivery-proofs','profiles','media');
+
+-- ------------------------------------------------------------
+-- 1. FUNCIONES AUXILIARES
+-- ------------------------------------------------------------
+
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+grant usage on schema private to postgres, service_role;
+
+create or replace function public.set_updated_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+create or replace function private.current_profile_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.id
+  from public.profiles p
+  where p.auth_user_id = (select auth.uid())
+  limit 1;
+$$;
+
+create or replace function private.current_role()
+returns text
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.role
+  from public.profiles p
+  where p.auth_user_id = (select auth.uid())
+  limit 1;
+$$;
+
+create or replace function private.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1 from public.profiles p
+    where p.auth_user_id = (select auth.uid())
+      and p.role = 'admin'
+      and p.active = true
+  );
+$$;
+
+create or replace function private.driver_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select d.id
+  from public.drivers d
+  join public.profiles p on p.id=d.profile_id
+  where p.auth_user_id=(select auth.uid())
+  limit 1;
+$$;
+
+create or replace function private.client_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select c.id
+  from public.clients c
+  join public.profiles p on p.id=c.profile_id
+  where p.auth_user_id=(select auth.uid())
+  limit 1;
+$$;
+
+-- ------------------------------------------------------------
+-- 2. AUTH / PERFILES
+-- ------------------------------------------------------------
+
+create table public.profiles (
   id uuid primary key default gen_random_uuid(),
-  actor_type text not null check(actor_type in('driver','client','admin')),
-  actor_id uuid,
-  session_token text unique not null,
-  expires_at timestamptz not null default now()+interval '30 days',
+  auth_user_id uuid unique not null references auth.users(id) on delete cascade,
+  role text not null check (role in ('admin','driver','client')),
+  full_name text not null,
+  phone text,
+  email text,
+  national_id text,
+  avatar_url text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index idx_profiles_auth_user on public.profiles(auth_user_id);
+create index idx_profiles_role on public.profiles(role);
+create index idx_profiles_national_id on public.profiles(national_id);
+
+create table public.app_roles (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  role text not null check (role in ('admin','driver','client')),
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.drivers(
+alter table public.profiles enable row level security;
+alter table public.app_roles enable row level security;
+
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_role text := coalesce(new.raw_user_meta_data->>'role','client');
+  v_name text := coalesce(new.raw_user_meta_data->>'full_name', split_part(coalesce(new.email,''),'@',1), 'Usuario');
+  v_nid text := nullif(new.raw_user_meta_data->>'national_id','');
+begin
+  if v_role not in ('admin','driver','client') then
+    v_role := 'client';
+  end if;
+  insert into public.profiles(auth_user_id,role,full_name,email,national_id)
+  values(new.id,v_role,v_name,new.email,v_nid)
+  on conflict (auth_user_id) do update set
+    role=excluded.role,
+    full_name=excluded.full_name,
+    email=excluded.email,
+    national_id=coalesce(excluded.national_id,public.profiles.national_id),
+    updated_at=now();
+  insert into public.app_roles(user_id,role)
+  values(new.id,v_role)
+  on conflict (user_id) do update set role=excluded.role;
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+create policy profiles_self_select on public.profiles
+  for select to authenticated
+  using (auth_user_id=(select auth.uid()) or (select private.is_admin()));
+
+create policy profiles_self_update on public.profiles
+  for update to authenticated
+  using (auth_user_id=(select auth.uid()) or (select private.is_admin()))
+  with check (auth_user_id=(select auth.uid()) or (select private.is_admin()));
+
+create policy app_roles_self_select on public.app_roles
+  for select to authenticated
+  using (user_id=(select auth.uid()) or (select private.is_admin()));
+
+-- ------------------------------------------------------------
+-- 3. CONDUCTORES / CLIENTES
+-- ------------------------------------------------------------
+
+create table public.drivers (
   id uuid primary key default gen_random_uuid(),
+  profile_id uuid unique not null references public.profiles(id) on delete cascade,
   username text unique not null,
-  pin_hash text not null,
+  pin_hash text,
   full_name text not null,
   phone text,
   national_id text unique,
@@ -151,242 +371,880 @@ create table if not exists public.drivers(
   face_descriptor jsonb,
   face_enrolled_at timestamptz,
   qr_url text,
-  last_lat numeric,
-  last_lng numeric,
+  last_lat double precision,
+  last_lng double precision,
   last_gps_at timestamptz,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists public.clients(
+create table public.clients (
   id uuid primary key default gen_random_uuid(),
+  profile_id uuid unique not null references public.profiles(id) on delete cascade,
   login text unique not null,
-  pin_hash text not null,
+  pin_hash text,
   full_name text not null,
   phone text,
   email text,
-  national_id text,
+  national_id text unique,
   photo_url text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists public.categories(
+create index idx_drivers_status on public.drivers(status);
+create index idx_drivers_profile on public.drivers(profile_id);
+create index idx_clients_profile on public.clients(profile_id);
+
+alter table public.drivers enable row level security;
+alter table public.clients enable row level security;
+
+create policy drivers_select on public.drivers
+  for select to authenticated
+  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()) or status='available');
+
+create policy drivers_update on public.drivers
+  for update to authenticated
+  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()))
+  with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+
+create policy drivers_admin_insert on public.drivers
+  for insert to authenticated
+  with check ((select private.is_admin()));
+
+create policy drivers_admin_delete on public.drivers
+  for delete to authenticated
+  using ((select private.is_admin()));
+
+create policy clients_select on public.clients
+  for select to authenticated
+  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+
+create policy clients_update on public.clients
+  for update to authenticated
+  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()))
+  with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+
+create policy clients_admin_insert on public.clients
+  for insert to authenticated
+  with check ((select private.is_admin()));
+
+-- ------------------------------------------------------------
+-- 4. CATEGORÍAS / TARIFAS
+-- ------------------------------------------------------------
+
+create table public.categories (
   id uuid primary key default gen_random_uuid(),
   code text unique not null,
   name text not null,
   active boolean not null default true,
   parameters jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists public.tariffs(
+create table public.tariffs (
   id uuid primary key default gen_random_uuid(),
   neighborhood text not null,
   category_id uuid references public.categories(id) on delete set null,
   category_code text,
-  amount numeric(12,2) not null default 0,
+  amount numeric(12,2) not null default 0 check(amount>=0),
   active boolean not null default true,
   notes text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists public.services(
+alter table public.categories enable row level security;
+alter table public.tariffs enable row level security;
+
+create policy categories_read on public.categories
+  for select to authenticated using (active=true or (select private.is_admin()));
+create policy categories_admin_write on public.categories
+  for all to authenticated
+  using ((select private.is_admin())) with check ((select private.is_admin()));
+
+create policy tariffs_read on public.tariffs
+  for select to authenticated using (active=true or (select private.is_admin()));
+create policy tariffs_admin_write on public.tariffs
+  for all to authenticated
+  using ((select private.is_admin())) with check ((select private.is_admin()));
+
+-- ------------------------------------------------------------
+-- 5. SERVICIOS
+-- ------------------------------------------------------------
+
+create table public.services (
   id uuid primary key default gen_random_uuid(),
-  client_id uuid references public.clients(id),
-  driver_id uuid references public.drivers(id),
-  category_id uuid references public.categories(id),
+  client_id uuid references public.clients(id) on delete set null,
+  driver_id uuid references public.drivers(id) on delete set null,
+  category_id uuid references public.categories(id) on delete set null,
   category_code text not null,
-  status text not null default 'waiting' check(status in('waiting','assigned','accepted','in_progress','completed','cancelled')),
+  status text not null default 'waiting' check(status in('waiting','assigned','accepted','in_progress','completed','cancelled','expired')),
   pickup_neighborhood text,
   pickup_address text,
-  pickup_lat numeric,
-  pickup_lng numeric,
+  pickup_lat double precision,
+  pickup_lng double precision,
   dropoff_neighborhood text,
   dropoff_address text,
-  dropoff_lat numeric,
-  dropoff_lng numeric,
+  dropoff_lat double precision,
+  dropoff_lng double precision,
   restaurant_name text,
   notes text,
-  base_price numeric(12,2) default 0,
-  tip numeric(12,2) default 0,
-  total_price numeric(12,2) default 0,
+  base_price numeric(12,2) not null default 0,
+  tip numeric(12,2) not null default 0,
+  total_price numeric(12,2) not null default 0,
   payment_method text,
   verification_code text,
+  verification_code_expires_at timestamptz,
   accepted_at timestamptz,
   started_at timestamptz,
   completed_at timestamptz,
+  cancelled_at timestamptz,
   delivery_photo_url text,
-  last_driver_lat numeric,
-  last_driver_lng numeric,
+  delivery_photo_path text,
+  last_driver_lat double precision,
+  last_driver_lng double precision,
   last_driver_gps_at timestamptz,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists public.service_assignments(
+create index idx_services_status on public.services(status);
+create index idx_services_driver on public.services(driver_id);
+create index idx_services_client on public.services(client_id);
+create index idx_services_created on public.services(created_at desc);
+
+alter table public.services enable row level security;
+
+create policy services_select on public.services
+  for select to authenticated
+  using (
+    client_id=(select private.client_id())
+    or driver_id=(select private.driver_id())
+    or (select private.is_admin())
+  );
+
+create policy services_client_insert on public.services
+  for insert to authenticated
+  with check (client_id=(select private.client_id()) or (select private.is_admin()));
+
+create policy services_driver_update on public.services
+  for update to authenticated
+  using (
+    (select private.is_admin())
+    or driver_id=(select private.driver_id())
+  )
+  with check (
+    (select private.is_admin())
+    or driver_id=(select private.driver_id())
+  );
+
+create policy services_admin_delete on public.services
+  for delete to authenticated
+  using ((select private.is_admin()));
+
+-- ------------------------------------------------------------
+-- 6. ASIGNACIONES / MENSAJES / PAGOS / GPS
+-- ------------------------------------------------------------
+
+create table public.service_assignments (
   id uuid primary key default gen_random_uuid(),
-  service_id uuid references public.services(id) on delete cascade,
-  driver_id uuid references public.drivers(id) on delete cascade,
+  service_id uuid not null references public.services(id) on delete cascade,
+  driver_id uuid not null references public.drivers(id) on delete cascade,
   assigned_by text default 'system',
   created_at timestamptz not null default now(),
-  accepted_at timestamptz
+  accepted_at timestamptz,
+  decision text
 );
 
-create table if not exists public.messages(
+create table public.messages (
   id uuid primary key default gen_random_uuid(),
   service_id uuid references public.services(id) on delete cascade,
-  sender_type text not null,
+  sender_type text not null check(sender_type in('driver','client','admin')),
   sender_id uuid,
   body text not null,
   attachment_url text,
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.payments(
+create table public.payments (
   id uuid primary key default gen_random_uuid(),
-  service_id uuid references public.services(id) on delete cascade,
+  service_id uuid unique references public.services(id) on delete cascade,
   driver_id uuid references public.drivers(id),
   client_id uuid references public.clients(id),
-  amount numeric(12,2) not null,
+  amount numeric(12,2) not null default 0,
   method text not null,
+  status text not null default 'confirmed',
   confirmed_at timestamptz default now()
 );
 
-create table if not exists public.driver_locations(
+create table public.driver_locations (
   id bigint generated always as identity primary key,
-  driver_id uuid references public.drivers(id) on delete cascade,
+  driver_id uuid not null references public.drivers(id) on delete cascade,
   service_id uuid references public.services(id) on delete set null,
-  lat numeric not null,
-  lng numeric not null,
-  accuracy numeric,
+  lat double precision not null,
+  lng double precision not null,
+  accuracy double precision,
   captured_at timestamptz not null default now()
 );
 
-create table if not exists public.media_assets(
-  id uuid primary key default gen_random_uuid(),
-  name text,
-  kind text check(kind in('image','video')),
-  url text not null,
-  active boolean default true,
-  created_at timestamptz not null default now()
-);
-
-create table if not exists public.driver_documents(
-  id uuid primary key default gen_random_uuid(),
-  driver_id uuid references public.drivers(id) on delete cascade,
-  kind text not null,
-  url text not null,
-  created_at timestamptz default now()
-);
-
-create index if not exists idx_services_status on public.services(status);
-create index if not exists idx_services_driver on public.services(driver_id);
-create index if not exists idx_services_client on public.services(client_id);
-create index if not exists idx_locations_driver on public.driver_locations(driver_id, captured_at desc);
-create index if not exists idx_tariffs_neighborhood on public.tariffs(lower(neighborhood));
-
-alter table public.app_sessions enable row level security;
-alter table public.drivers enable row level security;
-alter table public.clients enable row level security;
-alter table public.categories enable row level security;
-alter table public.tariffs enable row level security;
-alter table public.services enable row level security;
 alter table public.service_assignments enable row level security;
 alter table public.messages enable row level security;
 alter table public.payments enable row level security;
 alter table public.driver_locations enable row level security;
-alter table public.media_assets enable row level security;
+
+create policy assignments_select on public.service_assignments
+  for select to authenticated
+  using (
+    driver_id=(select private.driver_id())
+    or (select private.is_admin())
+    or exists(select 1 from public.services s where s.id=service_id and s.client_id=(select private.client_id()))
+  );
+
+create policy assignments_admin_insert on public.service_assignments
+  for insert to authenticated with check ((select private.is_admin()));
+
+create policy assignments_driver_update on public.service_assignments
+  for update to authenticated
+  using (driver_id=(select private.driver_id()) or (select private.is_admin()))
+  with check (driver_id=(select private.driver_id()) or (select private.is_admin()));
+
+create policy messages_select on public.messages
+  for select to authenticated
+  using (
+    (select private.is_admin())
+    or sender_id=(select private.driver_id())
+    or sender_id=(select private.client_id())
+    or exists (
+      select 1 from public.services s
+      where s.id=messages.service_id
+        and (s.client_id=(select private.client_id()) or s.driver_id=(select private.driver_id()))
+    )
+  );
+
+create policy messages_insert on public.messages
+  for insert to authenticated
+  with check (
+    (select private.is_admin())
+    or sender_id=(select private.current_profile_id())
+    or sender_id=(select private.driver_id())
+    or sender_id=(select private.client_id())
+  );
+
+create policy messages_update on public.messages
+  for update to authenticated
+  using ((select private.is_admin()) or sender_id=(select private.current_profile_id()))
+  with check ((select private.is_admin()) or sender_id=(select private.current_profile_id()));
+
+create policy payments_select on public.payments
+  for select to authenticated
+  using (
+    (select private.is_admin())
+    or driver_id=(select private.driver_id())
+    or client_id=(select private.client_id())
+  );
+
+create policy payments_admin_insert on public.payments
+  for insert to authenticated
+  with check ((select private.is_admin()) or driver_id=(select private.driver_id()));
+
+create policy locations_insert on public.driver_locations
+  for insert to authenticated
+  with check (driver_id=(select private.driver_id()));
+
+create policy locations_select on public.driver_locations
+  for select to authenticated
+  using (
+    driver_id=(select private.driver_id())
+    or (select private.is_admin())
+    or exists(
+      select 1 from public.services s
+      where s.id=driver_locations.service_id and s.client_id=(select private.client_id())
+    )
+  );
+
+-- ------------------------------------------------------------
+-- 7. DOCUMENTOS / MEDIA
+-- ------------------------------------------------------------
+
+create table public.driver_documents (
+  id uuid primary key default gen_random_uuid(),
+  driver_id uuid not null references public.drivers(id) on delete cascade,
+  document_type text not null,
+  storage_path text not null,
+  url text,
+  status text not null default 'pending',
+  expires_at date,
+  notes text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.media_assets (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  kind text not null check(kind in('image','video')),
+  url text not null,
+  storage_path text,
+  active boolean not null default true,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.driver_documents enable row level security;
+alter table public.media_assets enable row level security;
 
--- Para una implementación real, restrinja estas políticas con JWT/Edge Functions.
--- El prototipo utiliza funciones RPC y un token de sesión de aplicación.
-create or replace function public.hash_pin(p_pin text)
-returns text language sql immutable as $$ select crypt(p_pin, gen_salt('bf',8)); $$;
+create policy driver_documents_select on public.driver_documents
+  for select to authenticated
+  using (driver_id=(select private.driver_id()) or (select private.is_admin()));
 
-create or replace function public.verify_pin(p_pin text, p_hash text)
-returns boolean language sql immutable as $$ select crypt(p_pin,p_hash)=p_hash; $$;
+create policy driver_documents_write on public.driver_documents
+  for all to authenticated
+  using (driver_id=(select private.driver_id()) or (select private.is_admin()))
+  with check (driver_id=(select private.driver_id()) or (select private.is_admin()));
 
-create or replace function public.create_driver(
-  p_username text,p_pin text,p_full_name text,p_phone text,p_national_id text,
-  p_plate text,p_bike_model text,p_bike_type text
-) returns uuid language plpgsql security definer set search_path=public as $$
-declare v_id uuid;
-begin
-  insert into drivers(username,pin_hash,full_name,phone,national_id,plate,bike_model,bike_type)
-  values(p_username,hash_pin(p_pin),p_full_name,p_phone,p_national_id,p_plate,p_bike_model,p_bike_type)
-  returning id into v_id;
-  return v_id;
-end $$;
+create policy media_read on public.media_assets
+  for select to authenticated
+  using (active=true or (select private.is_admin()));
+
+create policy media_admin_write on public.media_assets
+  for all to authenticated
+  using ((select private.is_admin()))
+  with check ((select private.is_admin()));
+
+-- ------------------------------------------------------------
+-- 8. STORAGE
+-- ------------------------------------------------------------
+
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
+  ('driver-documents','driver-documents',false,15728640,array['image/jpeg','image/png','application/pdf']),
+  ('delivery-proofs','delivery-proofs',false,15728640,array['image/jpeg','image/png','image/webp']),
+  ('profiles','profiles',true,5242880,array['image/jpeg','image/png','image/webp']),
+  ('media','media',true,104857600,array['image/jpeg','image/png','image/webp','video/mp4','video/webm'])
+;
+
+create policy driver_docs_upload on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id='driver-documents'
+    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
+  );
+
+create policy driver_docs_read on storage.objects
+  for select to authenticated
+  using (
+    bucket_id='driver-documents'
+    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
+  );
+
+create policy driver_docs_update on storage.objects
+  for update to authenticated
+  using (
+    bucket_id='driver-documents'
+    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
+  )
+  with check (
+    bucket_id='driver-documents'
+    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
+  );
+
+create policy driver_docs_delete on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id='driver-documents'
+    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
+  );
+
+create policy delivery_proofs_upload on storage.objects
+  for insert to authenticated
+  with check (
+    bucket_id='delivery-proofs'
+    and (
+      (select private.is_admin())
+      or exists(
+        select 1 from public.services s
+        where s.id::text=(storage.foldername(name))[1]
+          and s.driver_id=(select private.driver_id())
+      )
+    )
+  );
+
+create policy delivery_proofs_read on storage.objects
+  for select to authenticated
+  using (
+    bucket_id='delivery-proofs'
+    and (
+      (select private.is_admin())
+      or exists(
+        select 1 from public.services s
+        where s.id::text=(storage.foldername(name))[1]
+          and (s.client_id=(select private.client_id()) or s.driver_id=(select private.driver_id()))
+      )
+    )
+  );
+
+create policy delivery_proofs_delete on storage.objects
+  for delete to authenticated
+  using (
+    bucket_id='delivery-proofs'
+    and ((select private.is_admin()) or exists(
+      select 1 from public.services s
+      where s.id::text=(storage.foldername(name))[1] and s.driver_id=(select private.driver_id())
+    ))
+  );
+
+create policy profiles_public_read on storage.objects
+  for select to anon,authenticated
+  using (bucket_id='profiles');
+
+create policy profiles_self_write on storage.objects
+  for insert to authenticated
+  with check (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
+
+create policy profiles_self_update on storage.objects
+  for update to authenticated
+  using (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text)
+  with check (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
+
+create policy profiles_self_delete on storage.objects
+  for delete to authenticated
+  using (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
+
+create policy media_public_read on storage.objects
+  for select to anon,authenticated
+  using (bucket_id='media');
+
+create policy media_admin_write on storage.objects
+  for all to authenticated
+  using (bucket_id='media' and (select private.is_admin()))
+  with check (bucket_id='media' and (select private.is_admin()));
+
+-- ------------------------------------------------------------
+-- 9. RPC DE AUTENTICACIÓN / CLIENTE / CONDUCTOR / SERVICIO
+-- ------------------------------------------------------------
+
+create or replace function public.resolve_login(p_role text,p_login text)
+returns table(auth_email text, role text, profile_id uuid, full_name text)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select p.email,p.role,p.id,p.full_name
+  from public.profiles p
+  left join public.drivers d on d.profile_id=p.id
+  left join public.clients c on c.profile_id=p.id
+  where p.active=true
+    and (
+      (p_role='admin' and p.role='admin' and (p_login='admin' or lower(coalesce(p.email,''))=lower(p_login)))
+      or
+      (p_role='driver' and p.role='driver' and (
+        lower(coalesce(d.username,''))=lower(p_login) or
+        d.national_id=p_login or d.phone=p_login or lower(coalesce(p.email,''))=lower(p_login)
+      ))
+      or
+      (p_role='client' and p.role='client' and (
+        c.login=p_login or c.national_id=p_login or c.phone=p_login or lower(coalesce(c.email,''))=lower(p_login) or lower(coalesce(p.email,''))=lower(p_login)
+      ))
+    )
+  limit 1;
+$$;
+
+grant execute on function public.resolve_login(text,text) to anon,authenticated;
 
 create or replace function public.create_client(
-  p_login text,p_pin text,p_full_name text,p_phone text,p_email text,p_national_id text
-) returns uuid language plpgsql security definer set search_path=public as $$
-declare v_id uuid;
+  p_login text,
+  p_full_name text,
+  p_phone text,
+  p_national_id text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_uid uuid := (select auth.uid());
+  v_profile uuid;
+  v_id uuid;
 begin
-  insert into clients(login,pin_hash,full_name,phone,email,national_id)
-  values(p_login,hash_pin(p_pin),p_full_name,p_phone,p_email,p_national_id)
+  if v_uid is null then raise exception 'auth_required'; end if;
+  select id into v_profile from public.profiles where auth_user_id=v_uid limit 1;
+  if v_profile is null then raise exception 'profile_not_found'; end if;
+  update public.profiles
+    set role='client',full_name=p_full_name,phone=p_phone,national_id=p_national_id,updated_at=now()
+    where id=v_profile;
+  update public.app_roles set role='client' where user_id=v_uid;
+  insert into public.clients(profile_id,login,full_name,phone,email,national_id)
+  values(v_profile,p_login,p_full_name,p_phone,(select email from auth.users where id=v_uid),p_national_id)
+  on conflict (profile_id) do update set
+    login=excluded.login,full_name=excluded.full_name,phone=excluded.phone,email=excluded.email,national_id=excluded.national_id,updated_at=now()
   returning id into v_id;
   return v_id;
-end $$;
+end;
+$$;
 
-create or replace function public.login_driver(p_username text,p_pin text)
-returns jsonb language plpgsql security definer set search_path=public as $$
-declare r drivers%rowtype; t text;
-begin
-  select * into r from drivers where username=p_username limit 1;
-  if not found or not verify_pin(p_pin,r.pin_hash) then return jsonb_build_object('ok',false,'message','Usuario o PIN incorrecto'); end if;
-  t:=encode(gen_random_bytes(32),'hex');
-  insert into app_sessions(actor_type,actor_id,session_token) values('driver',r.id,t);
-  return jsonb_build_object('ok',true,'token',t,'profile',to_jsonb(r)-'pin_hash');
-end $$;
+grant execute on function public.create_client(text,text,text,text) to authenticated;
 
-create or replace function public.login_client(p_login text,p_pin text)
-returns jsonb language plpgsql security definer set search_path=public as $$
-declare r clients%rowtype; t text;
+create or replace function public.create_driver(
+  p_auth_email text,
+  p_username text,
+  p_full_name text,
+  p_phone text,
+  p_national_id text,
+  p_plate text,
+  p_bike_model text,
+  p_bike_type text,
+  p_approved boolean default false
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_auth uuid;
+  v_profile uuid;
+  v_driver uuid;
 begin
-  select * into r from clients where login=p_login or email=p_login or national_id=p_login limit 1;
-  if not found or not verify_pin(p_pin,r.pin_hash) then return jsonb_build_object('ok',false,'message','Usuario o PIN incorrecto'); end if;
-  t:=encode(gen_random_bytes(32),'hex');
-  insert into app_sessions(actor_type,actor_id,session_token) values('client',r.id,t);
-  return jsonb_build_object('ok',true,'token',t,'profile',to_jsonb(r)-'pin_hash');
-end $$;
+  if not (select private.is_admin()) then raise exception 'admin_required'; end if;
+  select id into v_auth from auth.users where lower(email)=lower(p_auth_email) limit 1;
+  if v_auth is null then raise exception 'auth_user_not_found'; end if;
+  insert into public.profiles(auth_user_id,role,full_name,phone,email,national_id)
+  values(v_auth,'driver',p_full_name,p_phone,p_auth_email,p_national_id)
+  on conflict (auth_user_id) do update set role='driver',full_name=excluded.full_name,phone=excluded.phone,email=excluded.email,national_id=excluded.national_id,updated_at=now()
+  returning id into v_profile;
+  insert into public.app_roles(user_id,role) values(v_auth,'driver') on conflict (user_id) do update set role='driver';
+  insert into public.drivers(profile_id,username,full_name,phone,national_id,plate,bike_model,bike_type,approved)
+  values(v_profile,p_username,p_full_name,p_phone,p_national_id,p_plate,p_bike_model,p_bike_type,p_approved)
+  on conflict (profile_id) do update set username=excluded.username,full_name=excluded.full_name,phone=excluded.phone,national_id=excluded.national_id,plate=excluded.plate,bike_model=excluded.bike_model,bike_type=excluded.bike_type,approved=excluded.approved,updated_at=now()
+  returning id into v_driver;
+  return v_driver;
+end;
+$$;
 
-create or replace function public.login_admin(p_user text,p_pin text)
-returns jsonb language plpgsql security definer set search_path=public as $$
+grant execute on function public.create_driver(text,text,text,text,text,text,text,text,boolean) to authenticated;
+
+create or replace function public.get_tariff(p_neighborhood text,p_category text)
+returns table(id uuid, amount numeric, neighborhood text, category_code text)
+language sql stable security invoker set search_path=''
+as $$
+  select t.id,t.amount,t.neighborhood,t.category_code
+  from public.tariffs t
+  where t.active=true
+    and lower(trim(t.neighborhood))=lower(trim(p_neighborhood))
+    and upper(t.category_code)=upper(p_category)
+  order by t.amount asc limit 1;
+$$;
+
+grant execute on function public.get_tariff(text,text) to authenticated;
+
+create or replace function public.create_service(
+  p_category_code text,
+  p_pickup_neighborhood text,
+  p_pickup_address text,
+  p_pickup_lat double precision,
+  p_pickup_lng double precision,
+  p_dropoff_neighborhood text,
+  p_dropoff_address text,
+  p_dropoff_lat double precision,
+  p_dropoff_lng double precision,
+  p_restaurant_name text,
+  p_notes text,
+  p_tip numeric default 0
+)
+returns public.services
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_client uuid := (select private.client_id());
+  v_cat uuid;
+  v_base numeric;
+  v_service public.services;
 begin
-  if p_user='admin' and p_pin='12' then
-    return jsonb_build_object('ok',true,'token',encode(gen_random_bytes(32),'hex'),'profile',jsonb_build_object('role','admin','full_name','Administrador'));
+  if v_client is null then raise exception 'client_not_found'; end if;
+  if p_tip is null or p_tip < 0 then raise exception 'invalid_tip'; end if;
+  select id into v_cat from public.categories where code=p_category_code and active=true limit 1;
+  if v_cat is null then raise exception 'category_not_found'; end if;
+  select amount into v_base from public.get_tariff(p_pickup_neighborhood,p_category_code) limit 1;
+  if v_base is null then raise exception 'tariff_not_found'; end if;
+  insert into public.services(
+    client_id,category_id,category_code,status,
+    pickup_neighborhood,pickup_address,pickup_lat,pickup_lng,
+    dropoff_neighborhood,dropoff_address,dropoff_lat,dropoff_lng,
+    restaurant_name,notes,base_price,tip,total_price
+  ) values(
+    v_client,v_cat,p_category_code,'waiting',
+    p_pickup_neighborhood,p_pickup_address,p_pickup_lat,p_pickup_lng,
+    p_dropoff_neighborhood,p_dropoff_address,p_dropoff_lat,p_dropoff_lng,
+    p_restaurant_name,p_notes,v_base,p_tip,v_base+p_tip
+  ) returning * into v_service;
+  return v_service;
+end;
+$$;
+
+grant execute on function public.create_service(text,text,text,double precision,double precision,text,text,double precision,double precision,text,text,numeric) to authenticated;
+
+create or replace function public.accept_service(p_service_id uuid)
+returns public.services
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_driver uuid := (select private.driver_id());
+  v_service public.services;
+begin
+  if v_driver is null then raise exception 'driver_not_found'; end if;
+  select * into v_service from public.services
+  where id=p_service_id and status in('waiting','assigned') and (driver_id is null or driver_id=v_driver)
+  for update;
+  if not found then raise exception 'service_not_available'; end if;
+  update public.services
+    set driver_id=v_driver,status='accepted',accepted_at=now(),verification_code=lpad((floor(random()*1000))::int::text,3,'0'),verification_code_expires_at=now()+interval '2 hours'
+    where id=p_service_id
+    returning * into v_service;
+  update public.drivers set status='busy' where id=v_driver;
+  insert into public.service_assignments(service_id,driver_id,assigned_by,decision,accepted_at)
+  values(p_service_id,v_driver,'driver','accepted',now());
+  return v_service;
+end;
+$$;
+
+grant execute on function public.accept_service(uuid) to authenticated;
+
+create or replace function public.start_service(p_service_id uuid)
+returns public.services
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  v_driver uuid := (select private.driver_id());
+  v_service public.services;
+begin
+  select * into v_service from public.services where id=p_service_id and driver_id=v_driver and status='accepted' for update;
+  if not found then raise exception 'service_not_ready'; end if;
+  update public.services set status='in_progress',started_at=now() where id=p_service_id returning * into v_service;
+  return v_service;
+end;
+$$;
+
+grant execute on function public.start_service(uuid) to authenticated;
+
+create or replace function public.complete_service(p_service_id uuid,p_payment_method text default null,p_delivery_photo_path text default null)
+returns public.services
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  v_driver uuid := (select private.driver_id());
+  v_service public.services;
+  v_url text;
+begin
+  select * into v_service from public.services where id=p_service_id and driver_id=v_driver and status in('accepted','in_progress') for update;
+  if not found then raise exception 'service_not_owned_or_not_active'; end if;
+  if p_delivery_photo_path is not null then
+    v_url := p_delivery_photo_path;
   end if;
-  return jsonb_build_object('ok',false,'message','Credenciales administrativas incorrectas');
-end $$;
+  update public.services
+    set status='completed',completed_at=now(),payment_method=p_payment_method,delivery_photo_path=p_delivery_photo_path,delivery_photo_url=v_url
+    where id=p_service_id
+    returning * into v_service;
+  update public.drivers set status='available' where id=v_driver;
+  return v_service;
+end;
+$$;
 
-create or replace function public.recover_client_pin(p_login text)
-returns jsonb language plpgsql security definer set search_path=public as $$
-declare r clients%rowtype; newpin text;
+grant execute on function public.complete_service(uuid,text,text) to authenticated;
+
+create or replace function public.cancel_service(p_service_id uuid,p_reason text default null)
+returns public.services
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  v_service public.services;
+  v_client uuid := (select private.client_id());
+  v_driver uuid := (select private.driver_id());
 begin
-  select * into r from clients where login=p_login or email=p_login or national_id=p_login limit 1;
-  if not found then return jsonb_build_object('ok',false,'message','No encontramos ese cliente'); end if;
-  newpin:=lpad((floor(random()*10000))::int::text,4,'0');
-  update clients set pin_hash=hash_pin(newpin) where id=r.id;
-  return jsonb_build_object('ok',true,'temporary_pin',newpin);
-end $$;
+  select * into v_service from public.services where id=p_service_id for update;
+  if not found then raise exception 'service_not_found'; end if;
+  if not ((select private.is_admin()) or (v_service.client_id=v_client and v_service.status in('waiting','assigned')) or (v_service.driver_id=v_driver and v_service.status in('assigned','accepted'))) then
+    raise exception 'not_authorized_to_cancel';
+  end if;
+  update public.services set status='cancelled',cancelled_at=now(),notes=case when p_reason is null then notes else coalesce(notes,'')||E'
+Cancelación: '||p_reason end where id=p_service_id returning * into v_service;
+  if v_service.driver_id is not null then update public.drivers set status='available' where id=v_service.driver_id and status='busy'; end if;
+  return v_service;
+end;
+$$;
 
-create or replace function public.recover_driver_pin(p_login text)
-returns jsonb language plpgsql security definer set search_path=public as $$
-declare r drivers%rowtype; newpin text;
+grant execute on function public.cancel_service(uuid,text) to authenticated;
+
+create or replace function public.set_driver_status(p_status text)
+returns public.drivers
+language plpgsql security definer set search_path=''
+as $$
+declare
+  v_id uuid := (select private.driver_id());
+  v public.drivers;
 begin
-  select * into r from drivers where username=p_login or national_id=p_login or phone=p_login limit 1;
-  if not found then return jsonb_build_object('ok',false,'message','No encontramos ese conductor'); end if;
-  newpin:=lpad((floor(random()*10000))::int::text,4,'0');
-  update drivers set pin_hash=hash_pin(newpin) where id=r.id;
-  return jsonb_build_object('ok',true,'temporary_pin',newpin);
+  if v_id is null then raise exception 'driver_not_found'; end if;
+  if p_status not in('offline','available','busy') then raise exception 'invalid_driver_status'; end if;
+  update public.drivers set status=p_status where id=v_id returning * into v;
+  return v;
+end;
+$$;
+
+grant execute on function public.set_driver_status(text) to authenticated;
+
+create or replace function public.record_driver_location(
+  p_service_id uuid,
+  p_lat double precision,
+  p_lng double precision,
+  p_accuracy double precision default null,
+  p_speed double precision default null,
+  p_heading double precision default null
+)
+returns public.driver_locations
+language plpgsql security definer set search_path=''
+as $$
+declare
+  v_driver uuid := (select private.driver_id());
+  v_row public.driver_locations;
+begin
+  if v_driver is null then raise exception 'driver_not_found'; end if;
+  if p_lat not between -90 and 90 or p_lng not between -180 and 180 then raise exception 'invalid_coordinates'; end if;
+  insert into public.driver_locations(driver_id,service_id,lat,lng,accuracy)
+  values(v_driver,p_service_id,p_lat,p_lng,p_accuracy) returning * into v_row;
+  update public.drivers set last_lat=p_lat,last_lng=p_lng,last_gps_at=now() where id=v_driver;
+  if p_service_id is not null then
+    update public.services set last_driver_lat=p_lat,last_driver_lng=p_lng,last_driver_gps_at=now()
+    where id=p_service_id and driver_id=v_driver and status in('accepted','in_progress');
+  end if;
+  return v_row;
+end;
+$$;
+
+grant execute on function public.record_driver_location(uuid,double precision,double precision,double precision,double precision,double precision) to authenticated;
+
+-- Bootstrap de administrador: después de crear el usuario en Auth.
+create or replace function public.bootstrap_admin(p_auth_user_id uuid,p_full_name text default 'Administrador')
+returns void
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  v_email text;
+begin
+  if exists(select 1 from public.profiles where role='admin') then raise exception 'admin_already_exists'; end if;
+  select email into v_email from auth.users where id=p_auth_user_id;
+  if v_email is null then raise exception 'auth_user_not_found'; end if;
+  insert into public.profiles(auth_user_id,role,full_name,email) values(p_auth_user_id,'admin',p_full_name,v_email);
+  insert into public.app_roles(user_id,role) values(p_auth_user_id,'admin');
+end;
+$$;
+
+revoke all on function public.bootstrap_admin(uuid,text) from public,anon,authenticated;
+grant execute on function public.bootstrap_admin(uuid,text) to service_role;
+
+-- ------------------------------------------------------------
+-- 10. TRIGGERS updated_at
+-- ------------------------------------------------------------
+
+drop trigger if exists trg_profiles_updated_at on public.profiles;
+create trigger trg_profiles_updated_at before update on public.profiles for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_drivers_updated_at on public.drivers;
+create trigger trg_drivers_updated_at before update on public.drivers for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_clients_updated_at on public.clients;
+create trigger trg_clients_updated_at before update on public.clients for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_categories_updated_at on public.categories;
+create trigger trg_categories_updated_at before update on public.categories for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_tariffs_updated_at on public.tariffs;
+create trigger trg_tariffs_updated_at before update on public.tariffs for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_services_updated_at on public.services;
+create trigger trg_services_updated_at before update on public.services for each row execute procedure public.set_updated_at();
+
+drop trigger if exists trg_driver_documents_updated_at on public.driver_documents;
+create trigger trg_driver_documents_updated_at before update on public.driver_documents for each row execute procedure public.set_updated_at();
+drop trigger if exists trg_media_assets_updated_at on public.media_assets;
+create trigger trg_media_assets_updated_at before update on public.media_assets for each row execute procedure public.set_updated_at();
+
+-- ------------------------------------------------------------
+-- 11. SEMILLAS
+-- ------------------------------------------------------------
+
+insert into public.categories(code,name,active)
+values ('PERSONAS','Personas',true),('RESTAURANTE','Restaurante',true),('DOCUMENTOS','Documentos',true)
+on conflict(code) do update set name=excluded.name,active=true;
+
+insert into public.tariffs(neighborhood,category_code,amount,active)
+values
+ ('Centro','PERSONAS',7000,true),
+ ('Rodadero','PERSONAS',9000,true),
+ ('Bastidas','PERSONAS',10000,true),
+ ('Centro','RESTAURANTE',8000,true),
+ ('Centro','DOCUMENTOS',7000,true)
+;
+
+-- ------------------------------------------------------------
+-- 12. REALTIME
+-- ------------------------------------------------------------
+
+alter table public.services replica identity full;
+alter table public.messages replica identity full;
+alter table public.driver_locations replica identity full;
+alter table public.drivers replica identity full;
+alter table public.notifications replica identity full;
+
+DO $$
+begin
+  begin execute 'alter publication supabase_realtime add table public.services'; exception when duplicate_object then null; when undefined_object then null; end;
+  begin execute 'alter publication supabase_realtime add table public.messages'; exception when duplicate_object then null; when undefined_object then null; end;
+  begin execute 'alter publication supabase_realtime add table public.driver_locations'; exception when duplicate_object then null; when undefined_object then null; end;
+  begin execute 'alter publication supabase_realtime add table public.drivers'; exception when duplicate_object then null; when undefined_object then null; end;
 end $$;
 
-grant execute on function public.login_driver(text,text) to anon,authenticated;
-grant execute on function public.login_client(text,text) to anon,authenticated;
-grant execute on function public.login_admin(text,text) to anon,authenticated;
-grant execute on function public.recover_client_pin(text) to anon,authenticated;
-grant execute on function public.recover_driver_pin(text) to anon,authenticated;
-grant execute on function public.create_driver(text,text,text,text,text,text,text,text) to authenticated;
-grant execute on function public.create_client(text,text,text,text,text,text) to anon,authenticated;
+-- ------------------------------------------------------------
+-- 13. GRANTS
+-- ------------------------------------------------------------
+
+grant usage on schema public to anon,authenticated;
+grant select on public.categories,public.tariffs to authenticated;
+grant select,insert,update,delete on all tables in schema public to authenticated;
+revoke all on public.app_roles from anon;
+
+commit;
+
+-- ============================================================
+-- PASO FINAL (FUERA DEL BLOQUE TRANSACTIONAL)
+-- ============================================================
+-- 1. En Supabase > Authentication > Users, crea un usuario admin.
+--    Ejemplo de email: admin@motogo.co
+--    El password debe corresponder al PIN mostrado por la app mediante
+--    la misma regla: MotoGo#<PIN>#2026!
+-- 2. Obtén su UUID y ejecuta como service_role/postgres:
+--    select public.bootstrap_admin('UUID_DEL_USUARIO','Administrador');
+-- 3. En Auth > Email, para altas internas de prueba puedes desactivar
+--    temporalmente "Confirm email".
+--
+-- La app usa Supabase Auth real. El PIN visible en MotoGo nunca se guarda
+-- como contraseña en tablas públicas; el HTML lo transforma a password de
+-- Auth antes de signInWithPassword/signUp.
+-- ============================================================
 `;
 
 let supa = null;
@@ -401,7 +1259,8 @@ const LS = {
 };
 const state = {
   role:"driver", session:null, nav:"home", maps:{}, watchers:{}, faceReady:false,
-  data:{drivers:[],clients:[],categories:[],tariffs:[],services:[],messages:[],locations:[],media:[]}
+  data:{drivers:[],clients:[],categories:[],tariffs:[],services:[],messages:[],locations:[],media:[]},
+  realtimeChannel:null, authUser:null
 };
 
 function $(id){return document.getElementById(id)}
@@ -440,14 +1299,16 @@ async function loadData(){
   ensureDemo();
   if(!supa) return;
   try {
-    const [drivers,clients,categories,tariffs,services,messages,media]=await Promise.all([
-      dbSelect("drivers"),dbSelect("clients"),dbSelect("categories"),dbSelect("tariffs"),dbSelect("services"),dbSelect("messages"),dbSelect("media_assets")
+    const [drivers,clients,categories,tariffs,services,messages,media,locations]=await Promise.all([
+      dbSelect("drivers"),dbSelect("clients"),dbSelect("categories"),dbSelect("tariffs"),
+      dbSelect("services",{select:"*,drivers:driver_id(full_name),clients:client_id(full_name)"}),
+      dbSelect("messages"),dbSelect("media_assets"),dbSelect("driver_locations")
     ]);
-    if(drivers.length) state.data.drivers=drivers;
-    if(clients.length) state.data.clients=clients;
-    if(categories.length) state.data.categories=categories;
-    if(tariffs.length) state.data.tariffs=tariffs;
-    state.data.services=services; state.data.messages=messages; state.data.media=media;
+    if(drivers.length || state.role==="driver") state.data.drivers=drivers;
+    if(clients.length || state.role==="client") state.data.clients=clients;
+    state.data.categories=categories; state.data.tariffs=tariffs;
+    state.data.services=services.map(s=>({...s,driver_name:s.driver_name||s.drivers?.full_name||null,client_name:s.client_name||s.clients?.full_name||null}));
+    state.data.messages=messages; state.data.media=media; state.data.locations=locations;
   } catch(e){console.warn("Carga remota parcial",e)}
 }
 async function dbInsert(table,payload){
@@ -461,6 +1322,44 @@ async function dbUpdate(table,id,payload){
 async function rpc(name,args){
   if(!supa) return {data:null,error:{message:"demo"}};
   return await supa.rpc(name,args);
+}
+function authPassword(pin){return `MotoGo#${String(pin).trim()}#2026!`}
+function safeFileName(name){return String(name||"archivo").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-zA-Z0-9._-]+/g,"_")}
+async function storageUpload(bucket,path,file){
+  if(!supa)return {data:null,error:{message:"Storage no disponible en modo demo"}};
+  return await supa.storage.from(bucket).upload(path,file,{upsert:true,contentType:file.type||undefined});
+}
+async function storagePublicUrl(bucket,path){
+  if(!supa)return null;
+  return supa.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+}
+async function storageSignedUrl(bucket,path,expires=900){
+  if(!supa)return null;
+  const {data,error}=await supa.storage.from(bucket).createSignedUrl(path,expires); if(error){console.warn(error);return null} return data?.signedUrl||null;
+}
+async function refreshAuthProfile(){
+  if(!supa)return;
+  const {data:{user}}=await supa.auth.getUser();
+  state.authUser=user||null;
+  if(!user){state.authProfile=null;return}
+  const {data:p,error}=await supa.from("profiles").select("*").eq("auth_user_id",user.id).maybeSingle();
+  if(error){console.warn("Perfil Auth",error);return}
+  state.authProfile=p||null;
+  if(p?.role==="driver") state.role="driver";
+  if(p?.role==="client") state.role="client";
+  if(p?.role==="admin") state.role="admin";
+  if(p?.role==="driver") state.session={role:"driver",token:"auth",profile:state.data.drivers.find(d=>d.profile_id===p.id)||null};
+  else if(p?.role==="client"){
+    let client=state.data.clients.find(c=>c.profile_id===p.id)||null;
+    if(!client){
+      const md=user.user_metadata||{};
+      const r=await rpc("create_client",{p_login:md.national_id||user.email,p_full_name:md.full_name||p.full_name||"Cliente",p_phone:md.phone||p.phone||"",p_national_id:md.national_id||p.national_id||null});
+      if(!r.error){await loadData();client=state.data.clients.find(c=>c.profile_id===p.id)||null;}
+    }
+    state.session={role:"client",token:"auth",profile:client};
+  }
+  else if(p?.role==="admin") state.session={role:"admin",token:"auth",profile:p};
+  if(state.session?.profile) localStorage.setItem(LS.session,JSON.stringify(state.session));
 }
 
 function openModal(title,html){$("modalTitle").textContent=title;$("modalBody").innerHTML=html;$("modalBackdrop").classList.add("open")}
@@ -481,22 +1380,24 @@ $("roleDriver").onclick=()=>setRole("driver"); $("roleClient").onclick=()=>setRo
 async function login(){
   const u=$("loginUser").value.trim(), p=$("loginPin").value.trim();
   if(!u||!p){$("loginInfo").textContent="Completa usuario y PIN.";return}
-  $("loginInfo").textContent="Validando…";
-  let result;
-  if(state.role==="driver"){
-    result = supa ? await rpc("login_driver",{p_username:u,p_pin:p}) : null;
-    if(supa && !result.error && result.data?.ok) state.session={role:"driver",token:result.data.token,profile:result.data.profile};
-    else if(!supa){const d=state.data.drivers.find(x=>x.username===u || x.national_id===u); if(d&&d.pin===p) state.session={role:"driver",token:"demo",profile:d};}
-  } else if(state.role==="client"){
-    result = supa ? await rpc("login_client",{p_login:u,p_pin:p}) : null;
-    if(supa && !result.error && result.data?.ok) state.session={role:"client",token:result.data.token,profile:result.data.profile};
-    else if(!supa){const c=state.data.clients.find(x=>x.login===u||x.email===u||x.national_id===u); if(c&&c.pin===p) state.session={role:"client",token:"demo",profile:c};}
-  } else {
-    result = supa ? await rpc("login_admin",{p_user:u,p_pin:p}) : null;
-    if(supa && !result.error && result.data?.ok) state.session={role:"admin",token:result.data.token,profile:result.data.profile};
-    else if(!supa && u==="admin" && p==="12") state.session={role:"admin",token:"demo",profile:{role:"admin",full_name:"Administrador"}};
+  $("loginInfo").textContent="Validando con Supabase Auth…";
+  if(!supa){
+    let ok=null;
+    if(state.role==="driver"){const d=state.data.drivers.find(x=>x.username===u||x.national_id===u);if(d&&d.pin===p)ok={role:"driver",profile:d};}
+    if(state.role==="client"){const c=state.data.clients.find(x=>x.login===u||x.email===u||x.national_id===u);if(c&&c.pin===p)ok={role:"client",profile:c};}
+    if(state.role==="admin"&&u==="admin"&&p==="12")ok={role:"admin",profile:{role:"admin",full_name:"Administrador"}};
+    if(!ok){$("loginInfo").textContent="Credenciales inválidas.";return}
+    state.session={...ok,token:"demo"}; localStorage.setItem(LS.session,JSON.stringify(state.session));
+  }else{
+    const r=await rpc("resolve_login",{p_role:state.role,p_login:u});
+    if(r.error||!r.data?.length){$("loginInfo").textContent="Usuario no encontrado.";return}
+    const identity=r.data[0];
+    const {data,error}=await supa.auth.signInWithPassword({email:identity.auth_email,password:authPassword(p)});
+    if(error||!data.user){console.warn(error);$("loginInfo").textContent=error?.message||"No fue posible iniciar sesión.";return}
+    state.authUser=data.user;
+    await loadData(); await refreshAuthProfile();
+    if(!state.session?.profile){$("loginInfo").textContent="La cuenta Auth no tiene un perfil MotoGo válido.";return}
   }
-  if(!state.session){$("loginInfo").textContent=(result?.data?.message||"Credenciales inválidas.")+(supa&&!result?.data?" Revisa el esquema SQL de Supabase.":"");return}
   localStorage.setItem(LS.session,JSON.stringify(state.session)); localStorage.setItem("motogo_role",state.role);
   $("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");
   await afterLogin();
@@ -508,7 +1409,7 @@ async function registerClient(){
   openModal("Crear cuenta de cliente",`
     <div class="form">
       <div class="row"><input id="rcName" placeholder="Nombre completo"><input id="rcId" placeholder="Documento de identidad"></div>
-      <div class="row"><input id="rcPhone" placeholder="Celular"><input id="rcEmail" placeholder="Correo (opcional)"></div>
+      <div class="row"><input id="rcPhone" placeholder="Celular"><input id="rcEmail" type="email" placeholder="Correo" required></div>
       <div class="small muted">Al registrarte se generará un PIN aleatorio de 4 dígitos. El PIN se mostrará una sola vez para que lo guardes.</div>
       <button class="btn primary" onclick="createClient()">Crear cuenta</button>
     </div>`);
@@ -517,43 +1418,37 @@ $("registerClientBtn").onclick=registerClient;
 
 async function createClient(){
   const full_name=$("rcName").value.trim(), national_id=$("rcId").value.trim(), phone=$("rcPhone").value.trim(), email=$("rcEmail").value.trim();
-  if(!full_name||!national_id||!phone){return alert("Completa nombre, documento y celular.")}
+  if(!full_name||!national_id||!phone||!email){return alert("Completa nombre, documento, celular y correo.")}
   const pin=String(Math.floor(Math.random()*10000)).padStart(4,"0");
   if(supa){
-    const {data,error}=await rpc("create_client",{p_login:national_id,p_pin:pin,p_full_name:full_name,p_phone:phone,p_email:email,p_national_id:national_id});
-    if(error||!data){return alert("No fue posible crear la cuenta. Instala el SQL primero.")}
-    await loadData();
-  } else {
+    const {data,error}=await supa.auth.signUp({email,password:authPassword(pin),options:{data:{role:"client",full_name,national_id,phone}}});
+    if(error)return alert(error.message);
+    if(!data.user)return alert("Supabase no devolvió el usuario.");
+    if(!data.session)return alert("Cuenta creada. Revisa el correo de confirmación antes de iniciar sesión.");
+    const r=await rpc("create_client",{p_login:national_id,p_full_name:full_name,p_phone:phone,p_national_id:national_id});
+    if(r.error)return alert(r.error.message);
+    await loadData(); await refreshAuthProfile();
+  }else{
     state.data.clients.push({id:uid(),login:national_id,pin,full_name,phone,email,national_id});persistState();
   }
-  openModal("Cuenta creada",`<p>Guarda tu PIN. Por seguridad, no se mostrará nuevamente como contraseña almacenada.</p><div class="pin-box">${pin}</div><button class="btn primary block" onclick="navigator.clipboard?.writeText('${pin}');alert('PIN copiado')">Copiar PIN</button>`);
+  openModal("Cuenta creada",`<p>Guarda tu PIN. La contraseña real de Supabase Auth no se almacena en tablas públicas.</p><div class="pin-box">${pin}</div><button class="btn primary block" onclick="navigator.clipboard?.writeText('${pin}');alert('PIN copiado')">Copiar PIN</button>`);
 }
 
 async function recover(){
   const role=state.role;
-  openModal("Recuperar PIN",`
-    <div class="form">
-      <p class="muted">Ingresa ${role==="driver"?"tu cédula, usuario o celular":"tu documento o correo"}.</p>
-      <input id="recoverKey" placeholder="${role==="driver"?"Cédula / usuario / celular":"Documento / correo"}">
-      <button class="btn primary" onclick="doRecover('${role}')">Generar PIN temporal</button>
-      <div class="tiny muted">Esto genera un PIN nuevo; no se recupera una contraseña anterior en texto plano.</div>
-    </div>`);
+  openModal("Recuperar acceso",`<div class="form"><p class="muted">Ingresa tu ${role==="driver"?"usuario/cédula/celular":"documento o correo"}. Se enviará un enlace de recuperación al correo asociado.</p><input id="recoverKey" placeholder="Usuario / documento / correo"><button class="btn primary" onclick="doRecover('${role}')">Enviar enlace</button></div>`);
 }
 $("recoverBtn").onclick=recover;
 
 async function doRecover(role){
   const key=$("recoverKey").value.trim(); if(!key)return;
-  let pin=null,error=null;
-  if(supa){
-    const r=role==="driver"?await rpc("recover_driver_pin",{p_login:key}):await rpc("recover_client_pin",{p_login:key});
-    error=r.error; pin=r.data?.temporary_pin;
-  }else{
-    const arr=role==="driver"?state.data.drivers:state.data.clients;
-    const x=arr.find(v=>v.username===key||v.national_id===key||v.phone===key||v.login===key||v.email===key);
-    if(x){pin=String(Math.floor(Math.random()*10000)).padStart(4,"0");x.pin=pin;persistState()}
-  }
-  if(error||!pin){$("modalBody").innerHTML=`<div class="empty">No encontramos un usuario con ese dato.</div>`;return}
-  openModal("PIN temporal",`<p>Este PIN es temporal. Inicia sesión y guárdalo de forma segura.</p><div class="pin-box">${pin}</div><button class="btn primary block" onclick="navigator.clipboard?.writeText('${pin}');alert('Copiado')">Copiar</button>`);
+  if(!supa)return alert("La recuperación Auth solo está disponible con Supabase conectado.");
+  const r=await rpc("resolve_login",{p_role:role,p_login:key});
+  const email=r.data?.[0]?.auth_email;
+  if(r.error||!email)return alert("No encontramos una cuenta con ese dato.");
+  const {error}=await supa.auth.resetPasswordForEmail(email,{redirectTo:location.href});
+  if(error)return alert(error.message);
+  closeModal();alert("Revisa el correo para restablecer tu acceso.");
 }
 
 async function afterLogin(){
@@ -565,9 +1460,10 @@ async function afterLogin(){
   requestNotificationPermission();
 }
 
-function logout(){
+async function logout(){
   Object.values(state.watchers).forEach(w=>{try{navigator.geolocation.clearWatch(w)}catch{}})
-  state.watchers={}; localStorage.removeItem(LS.session); state.session=null;
+  state.watchers={}; if(state.realtimeChannel&&supa){try{await supa.removeChannel(state.realtimeChannel)}catch{}} state.realtimeChannel=null;
+  if(supa)await supa.auth.signOut(); localStorage.removeItem(LS.session); state.session=null; state.authUser=null; state.authProfile=null;
   $("app").classList.add("hidden"); $("loginScreen").classList.remove("hidden"); $("loginInfo").textContent="Sesión cerrada.";
 }
 $("logoutBtn").onclick=logout;
@@ -647,13 +1543,20 @@ function renderDriverProfile(){
     <div class="card"><h3>Datos</h3><div class="form"><div><label class="tiny muted">Nombre</label><input value="${esc(p.full_name)}" id="pfName"></div><div class="row"><input value="${esc(p.phone||"")}" id="pfPhone" placeholder="Celular"><input value="${esc(p.plate||"")}" id="pfPlate" placeholder="Placa"></div><div class="row"><input value="${esc(p.bike_model||"")}" id="pfModel" placeholder="Modelo"><input value="${esc(p.bike_type||"")}" id="pfType" placeholder="Tipo"></div><button class="btn primary" onclick="saveDriverProfile()">Guardar</button></div></div>
     <div class="card"><h3>QR de perfil</h3><img class="qr" src="${qrUrl(p.id)}"><p class="tiny muted">El cliente puede escanearlo o usar el código de 3 dígitos generado al aceptar un servicio.</p><button class="btn block" onclick="copyText('${p.id}')">Copiar ID de perfil</button></div>
   </div>
-  <div class="card" style="margin-top:16px"><h3>Documentos</h3><div class="grid g2"><div class="file-list">${["Licencia de tránsito","Tarjeta de propiedad","Cédula","SOAT","Tecnomecánica"].map(x=>`<div class="file-item"><span>${x}</span><span class="badge">${"✓"}</span></div>`).join("")}</div><div class="tiny muted">En producción, los archivos deben guardarse en Supabase Storage con políticas RLS.</div></div></div>`;
+  <div class="card" style="margin-top:16px"><h3>Documentos</h3><div class="grid g2"><div class="file-list">${[["transit_license","Licencia de tránsito"],["ownership_card","Tarjeta de propiedad"],["national_id","Cédula"],["soat","SOAT"],["inspection","Tecnomecánica"]].map(([k,label])=>`<div class="file-item"><span>${label}</span><label class="btn">Subir<input type="file" accept="image/*,application/pdf" hidden onchange="uploadDriverDocument('${k}',this.files[0])"></label></div>`).join("")}</div><div><div class="tiny muted">Los documentos se guardan en el bucket privado <strong>driver-documents</strong>.</div><div id="driverDocStatus" class="tiny muted" style="margin-top:8px"></div></div></div></div>`;
 }
 function qrUrl(text){return "https://quickchart.io/qr?size=280&text="+encodeURIComponent("MOTOGO:"+text)}
 function copyText(t){navigator.clipboard?.writeText(t);alert("Copiado")}
 async function saveDriverProfile(){
   const p=state.session.profile; const patch={full_name:$("pfName").value,phone:$("pfPhone").value,plate:$("pfPlate").value,bike_model:$("pfModel").value,bike_type:$("pfType").value};
   if(supa) await dbUpdate("drivers",p.id,patch); Object.assign(p,patch); state.session.profile=p; localStorage.setItem(LS.session,JSON.stringify(state.session));alert("Perfil actualizado");render()
+}
+async function uploadDriverDocument(documentType,file){
+ if(!file)return;const p=state.session?.profile;if(!p||!supa)return;
+ const path=`${p.id}/${documentType}/${Date.now()}-${safeFileName(file.name)}`;
+ const up=await storageUpload("driver-documents",path,file);if(up.error)return alert(up.error.message);
+ const r=await dbInsert("driver_documents",{driver_id:p.id,document_type:documentType,storage_path:path,status:"pending"});
+ if(r.error)return alert(r.error.message);$("driverDocStatus").textContent="Documento subido correctamente.";
 }
 
 function renderClient(){
@@ -706,14 +1609,14 @@ async function requestClientGPS(){
 }
 async function createClientService(e){
  e.preventDefault();
- const p=state.session.profile, cat=$("csCat").value, t=tariffFor($("csPickupNeighborhood").value,cat), base=Number(t?.amount||0), tip=Number($("csTip").value||0);
- const service={client_id:p.id,category_code:cat,category_id:state.data.categories.find(c=>c.code===cat)?.id||null,status:"waiting",pickup_neighborhood:$("csPickupNeighborhood").value,pickup_address:$("csPickupAddress").value,dropoff_neighborhood:$("csDropNeighborhood").value,dropoff_address:$("csDropAddress").value,restaurant_name:cat==="RESTAURANTE"?$("csRestaurant").value:null,notes:$("csNotes").value,base_price:base,tip,total_price:base+tip,pickup_lat:window.clientGPS?.lat||null,pickup_lng:window.clientGPS?.lng||null};
- let r;
- if(supa){r=await dbInsert("services",service); if(r.error)return alert("No fue posible crear el servicio.")}
- else{r=await dbInsert("services",service)}
- const s=r.data||{...service,id:uid(),created_at:new Date().toISOString()};
- s.client_name=p.full_name; state.data.services.push(s); persistState(); state.nav="active"; renderNav(); render();
- startWaitingTimer(s.id);
+ const cat=$("csCat").value, tip=Number($("csTip").value||0), payload={
+   p_category_code:cat,p_pickup_neighborhood:$("csPickupNeighborhood").value,p_pickup_address:$("csPickupAddress").value,
+   p_pickup_lat:window.clientGPS?.lat||null,p_pickup_lng:window.clientGPS?.lng||null,p_dropoff_neighborhood:$("csDropNeighborhood").value,p_dropoff_address:$("csDropAddress").value,
+   p_dropoff_lat:null,p_dropoff_lng:null,p_restaurant_name:cat==="RESTAURANTE"?$("csRestaurant").value:null,p_notes:$("csNotes").value,p_tip:tip};
+ let s;
+ if(supa){const r=await rpc("create_service",payload);if(r.error)return alert(r.error.message);s=r.data;}
+ else{const t=tariffFor(payload.p_pickup_neighborhood,cat),base=Number(t?.amount||0);s={...payload,id:uid(),client_id:state.session.profile.id,category_code:cat,status:"waiting",pickup_neighborhood:payload.p_pickup_neighborhood,pickup_address:payload.p_pickup_address,dropoff_neighborhood:payload.p_dropoff_neighborhood,dropoff_address:payload.p_dropoff_address,base_price:base,tip,total_price:base+tip,created_at:new Date().toISOString()};}
+ state.data.services.push(s);persistState();state.nav="active";renderNav();render();startWaitingTimer(s.id);
 }
 let waitingTimer=null;
 function startWaitingTimer(id){
@@ -779,49 +1682,63 @@ function renderAdminChats(){
  $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Chats</h2><div class="muted">Agrupados por servicio.</div></div></div><div class="grid g2">${Object.keys(groups).length?Object.keys(groups).map(id=>`<div class="card"><h3>Servicio ${id.slice(0,8)}</h3><div class="chat">${groups[id].map(m=>`<div class="msg ${m.sender_type==="admin"?"me":""}">${esc(m.body)}<small>${esc(m.sender_type)}</small></div>`).join("")}</div></div>`).join(""):`<div class="empty">No hay mensajes.</div>`}</div>`;
 }
 function renderAdminMedia(){
- $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Publicidad</h2><div class="muted">Imágenes y videos que podrá mostrar el cliente/conductor.</div></div></div><div class="card"><label class="btn">Seleccionar imágenes/videos<input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden onchange="previewMedia(event)"></label><div id="mediaPreview" class="grid g3" style="margin-top:14px"></div><p class="tiny muted">Para producción, sube el archivo a Supabase Storage y guarda la URL en media_assets.</p></div><div class="grid g3" style="margin-top:16px">${state.data.media.map(m=>`<div class="card"><div class="strong">${esc(m.name||"Publicidad")}</div><div class="tiny muted">${esc(m.kind||"")}</div><a class="small" href="${esc(m.url)}" target="_blank">Abrir</a></div>`).join("")}</div>`;
+ $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Publicidad</h2><div class="muted">Imágenes y videos que podrá mostrar el cliente/conductor.</div></div></div><div class="card"><label class="btn">Seleccionar imágenes/videos<input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden onchange="previewMedia(event)"></label><button class="btn primary" style="margin-left:8px" onclick="uploadSelectedMedia()">Subir a Storage</button><div id="mediaPreview" class="grid g3" style="margin-top:14px"></div><p class="tiny muted">Los archivos se guardan en el bucket público <strong>media</strong>.</p></div><div class="grid g3" style="margin-top:16px">${state.data.media.map(m=>`<div class="card"><div class="strong">${esc(m.name||"Publicidad")}</div><div class="tiny muted">${esc(m.kind||"")}</div><a class="small" href="${esc(m.url)}" target="_blank">Abrir</a></div>`).join("")}</div>`;
 }
 function renderAdminSQL(){
- $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Instalación Supabase</h2><div class="muted">Copia el esquema completo al SQL Editor de Supabase y ejecútalo.</div></div><button class="btn primary" onclick="navigator.clipboard.writeText(SETUP_SQL);alert('SQL copiado')">Copiar SQL</button></div><div class="card"><textarea style="height:520px;font-family:ui-monospace,monospace;font-size:12px">${esc(SETUP_SQL)}</textarea></div><div class="card" style="margin-top:16px"><strong>Nota de seguridad:</strong> la clave anon/publishable puede ir en frontend. No coloques nunca una service_role key aquí. El envío de WhatsApp debe hacerse mediante un backend o Edge Function para proteger la API key.</div>`;
+ $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Instalación Supabase</h2><div class="muted">Copia el esquema completo al SQL Editor de Supabase y ejecútalo.</div></div><button class="btn primary" onclick="navigator.clipboard.writeText(SETUP_SQL);alert('SQL copiado')">Copiar SQL</button></div><div class="card"><textarea style="height:520px;font-family:ui-monospace,monospace;font-size:12px">${esc(SETUP_SQL)}</textarea></div><div class="card" style="margin-top:16px"><strong>Instalación:</strong> primero ejecuta el SQL, luego crea los usuarios en Supabase Auth y vincula el admin. <strong>Nota de seguridad:</strong> la clave anon/publishable puede ir en frontend. No coloques nunca una service_role key aquí. El envío de WhatsApp debe hacerse mediante un backend o Edge Function para proteger la API key.</div>`;
 }
 
 async function toggleDriverStatus(){
- const p=state.session.profile; p.status=p.status==="available"?"offline":"available"; if(supa)await dbUpdate("drivers",p.id,{status:p.status});localStorage.setItem(LS.session,JSON.stringify(state.session));render();startDriverGPS();
+ const p=state.session.profile; const next=p.status==="available"?"offline":"available";
+ if(supa){const r=await rpc("set_driver_status",{p_status:next});if(r.error)return alert(r.error.message);Object.assign(p,r.data||{status:next});}else p.status=next;
+ localStorage.setItem(LS.session,JSON.stringify(state.session));render();startDriverGPS();
 }
 async function acceptDriverService(id){
- const p=state.session.profile,s=state.data.services.find(x=>x.id===id); if(!s)return;
- if(s.driver_id && s.driver_id!==p.id)return alert("Este servicio ya fue tomado.");
- const code=String(Math.floor(Math.random()*900)+100);
- s.driver_id=p.id;s.driver_name=p.full_name;s.status="accepted";s.verification_code=code;s.accepted_at=new Date().toISOString();
- p.status="busy"; if(supa){await dbUpdate("services",id,{driver_id:p.id,status:"accepted",verification_code:code,accepted_at:s.accepted_at});await dbUpdate("drivers",p.id,{status:"busy"})}persistState();notifyStrong("Nuevo servicio",`Servicio aceptado. Código ${code}`);render();
+ const s=state.data.services.find(x=>x.id===id); if(!s)return;
+ if(supa){const r=await rpc("accept_service",{p_service_id:id});if(r.error)return alert(r.error.message);Object.assign(s,r.data||{});}
+ else {s.driver_id=state.session.profile.id;s.status="accepted";s.accepted_at=new Date().toISOString();s.verification_code=String(Math.floor(Math.random()*900)+100);}
+ state.data.services=state.data.services.map(x=>x.id===s.id?{...x,...s}:x); state.session.profile.status="busy"; localStorage.setItem(LS.session,JSON.stringify(state.session)); persistState();notifyStrong("Nuevo servicio",`Servicio aceptado. Código ${s.verification_code||"—"}`);render();
 }
-async function startService(id){const s=state.data.services.find(x=>x.id===id);if(!s)return;s.status="in_progress";s.started_at=new Date().toISOString();if(supa)await dbUpdate("services",id,{status:"in_progress",started_at:s.started_at});persistState();render();startDriverGPS()}
+async function startService(id){const s=state.data.services.find(x=>x.id===id);if(!s)return;if(supa){const r=await rpc("start_service",{p_service_id:id});if(r.error)return alert(r.error.message);Object.assign(s,r.data||{});}else{s.status="in_progress";s.started_at=new Date().toISOString();}persistState();render();startDriverGPS()}
 function finishService(id){
  const s=state.data.services.find(x=>x.id===id); if(!s)return;
  if(s.category_code==="PERSONAS"){openModal("Terminar servicio",`<div class="form"><p>Selecciona el método de pago y confirma.</p><select id="finishPay"><option value="efectivo">Efectivo</option><option value="transferencia">Transferencia</option><option value="qr">QR</option><option value="otro">Otro</option></select><button class="btn primary" onclick="completeService('${id}',true)">Confirmar pago y terminar</button><button class="btn" onclick="completeService('${id}',false)">Terminar sin cobro</button></div>`)}
  else openModal("Terminar servicio",`<div class="form"><p>Confirma la entrega del servicio.</p><button class="btn primary" onclick="completeService('${id}',false)">Terminar servicio</button></div>`);
 }
 async function completeService(id,payment){
- const s=state.data.services.find(x=>x.id===id); const p=state.session.profile;if(!s)return;
- s.status="completed";s.completed_at=new Date().toISOString();if(payment)s.payment_method=$("finishPay").value;
- if(s.category_code==="RESTAURANTE"){openModal("Foto de entrega",`<div class="form"><input type="file" id="deliveryFile" accept="image/*"><button class="btn primary" onclick="finishWithPhoto('${id}')">Guardar entrega</button></div>`);return}
- await finalizeCompleted(s,payment);closeModal();
+ const s=state.data.services.find(x=>x.id===id);if(!s)return;
+ const pay=payment?$("finishPay").value:null;
+ if(s.category_code==="RESTAURANTE"){
+   openModal("Foto de entrega",`<div class="form"><input type="file" id="deliveryFile" accept="image/*"><button class="btn primary" onclick="finishWithPhoto('${id}',${JSON.stringify(pay)})">Subir y terminar</button></div>`);
+   return;
+ }
+ await finalizeCompleted(s,pay,null);
+ closeModal();
 }
-async function finishWithPhoto(id){const s=state.data.services.find(x=>x.id===id);const file=$("deliveryFile").files?.[0];if(file)s.delivery_photo_url=URL.createObjectURL(file);await finalizeCompleted(s,false);closeModal()}
-async function finalizeCompleted(s,payment){
- if(supa)await dbUpdate("services",s.id,{status:"completed",completed_at:s.completed_at,payment_method:s.payment_method||null,delivery_photo_url:s.delivery_photo_url||null});
- if(s.driver_id){const d=state.data.drivers.find(x=>x.id===s.driver_id);if(d){d.status="available";if(supa)await dbUpdate("drivers",d.id,{status:"available"})}}
- persistState();notifyStrong("Servicio terminado","El servicio fue cerrado correctamente.");render();
+async function finishWithPhoto(id,payment){
+ const s=state.data.services.find(x=>x.id===id), file=$("deliveryFile")?.files?.[0]; if(!s||!file)return alert("Selecciona una foto.");
+ if(supa){
+   const path=`${s.id}/${Date.now()}-${safeFileName(file.name)}`;
+   const up=await storageUpload("delivery-proofs",path,file); if(up.error)return alert(up.error.message);
+   await finalizeCompleted(s,payment||null,path);
+ }else{await finalizeCompleted(s,payment||null,URL.createObjectURL(file));}
+ closeModal();
+}
+async function finalizeCompleted(s,payment,path){
+ if(supa){const r=await rpc("complete_service",{p_service_id:s.id,p_payment_method:payment||null,p_delivery_photo_path:path||null});if(r.error)return alert(r.error.message);Object.assign(s,r.data||{});}
+ else{s.status="completed";s.completed_at=new Date().toISOString();s.payment_method=payment||null;s.delivery_photo_path=path||null;}
+ const d=state.data.drivers.find(x=>x.id===s.driver_id);if(d)d.status="available";
+ state.session.profile.status="available";localStorage.setItem(LS.session,JSON.stringify(state.session));persistState();notifyStrong("Servicio terminado","El servicio fue cerrado correctamente.");render();
 }
 function openService(id){
  const s=state.data.services.find(x=>x.id===id);if(!s)return;
  openModal("Detalle del servicio",`<div class="grid g2"><div class="card"><div class="label">Categoría</div><div class="strong">${esc(s.category_code)}</div><div class="label" style="margin-top:10px">Recogida</div><div>${esc(s.pickup_address)}<br>${esc(s.pickup_neighborhood||"")}</div><div class="label" style="margin-top:10px">Llegada</div><div>${esc(s.dropoff_address)}<br>${esc(s.dropoff_neighborhood||"")}</div></div><div class="card"><div class="label">Total</div><div class="price">${money(s.total_price)}</div><div class="label" style="margin-top:10px">Código</div><div class="pin-box" style="font-size:32px">${esc(s.verification_code||"—")}</div><button class="btn primary block" onclick="openChat('${s.id}','${state.role}')">Chat privado</button></div></div>`);
 }
-function openChat(id,who){openModal("Chat del servicio",`<div id="chatBox" class="chat"></div><div class="chat-compose"><input id="chatInput" placeholder="Escribe un mensaje…"><button class="btn primary" onclick="sendChat('${id}','${who}')">Enviar</button></div>`);refreshChat(id)}
-async function sendChat(id,who){const body=$("chatInput").value.trim();if(!body)return;const senderId=state.role==="admin"?null:state.session.profile.id;const m={service_id:id,sender_type:state.role,sender_id:senderId,body};if(supa)await dbInsert("messages",m);state.data.messages.push({...m,id:uid(),created_at:new Date().toISOString()});persistState();$("chatInput").value="";refreshChat(id)}
+function openChat(id,who){state.currentChatId=id;openModal("Chat del servicio",`<div id="chatBox" class="chat"></div><div class="chat-compose"><input id="chatInput" placeholder="Escribe un mensaje…"><button class="btn primary" onclick="sendChat('${id}','${who}')">Enviar</button></div>`);refreshChat(id)}
+async function sendChat(id,who){const body=$("chatInput").value.trim();if(!body)return;const senderId=state.role==="admin"?null:state.session.profile.id;const m={service_id:id,sender_type:state.role,sender_id:senderId,body};let out=m;if(supa){const r=await dbInsert("messages",m);if(r.error)return alert(r.error.message);out=r.data;}state.data.messages.push(out);persistState();$("chatInput").value="";refreshChat(id)}
 function refreshChat(id){const msgs=state.data.messages.filter(m=>m.service_id===id);const box=$("chatBox");if(!box)return;box.innerHTML=msgs.map(m=>`<div class="msg ${m.sender_type===state.role?"me":""}">${esc(m.body)}<small>${esc(m.sender_type)}</small></div>`).join("")||`<div class="empty">No hay mensajes.</div>`;box.scrollTop=box.scrollHeight}
 function renderChat(target){const rows=state.data.messages.filter(m=>m.sender_type==="admin"||m.sender_id===state.session.profile.id);$("view").innerHTML=`<div class="card"><h3>Chat con administración</h3><div id="adminChatBox" class="chat">${rows.length?rows.map(m=>`<div class="msg ${m.sender_type==="admin"?"":"me"}">${esc(m.body)}<small>${esc(m.sender_type)}</small></div>`).join(""):`<div class="empty">No hay mensajes.</div>`}</div><div class="chat-compose"><input id="adminChatInput" placeholder="Reporta una novedad…"><button class="btn primary" onclick="sendAdminMessage()">Enviar</button></div></div>`}
-async function sendAdminMessage(){const body=$("adminChatInput").value.trim();if(!body)return;const m={service_id:null,sender_type:state.role,sender_id:state.role==="admin"?null:state.session.profile.id,body};if(supa)await dbInsert("messages",m);state.data.messages.push({...m,id:uid(),created_at:new Date().toISOString()});persistState();renderChat("admin")}
+async function sendAdminMessage(){const body=$("adminChatInput").value.trim();if(!body)return;const m={service_id:null,sender_type:state.role,sender_id:state.role==="admin"?null:state.session.profile.id,body};let out=m;if(supa){const r=await dbInsert("messages",m);if(r.error)return alert(r.error.message);out=r.data;}state.data.messages.push(out);persistState();renderChat("admin")}
 
 function openDriverCreateService(){openModal("Crear servicio individual",`<div class="form"><div class="row"><select id="dsCat">${state.data.categories.filter(c=>c.active!==false).map(c=>`<option value="${esc(c.code)}">${esc(c.name)}</option>`).join("")}</select><input id="dsRestaurant" placeholder="Restaurante (si aplica)"></div><div class="row"><input id="dsPickup" placeholder="Dirección recogida"><input id="dsDrop" placeholder="Dirección llegada"></div><div class="row"><input id="dsPrice" type="number" placeholder="Precio"><input id="dsClient" placeholder="Nombre cliente"></div><button class="btn primary" onclick="createDriverService()">Crear servicio</button></div>`)}
 async function createDriverService(){
@@ -851,13 +1768,13 @@ async function confirmAssign(id){
 }
 function notifyDriver(driver,s){notifyStrong("Servicio asignado",`Tienes un servicio ${s.category_code}. Código ${s.verification_code||""}`);alert(`Servicio asignado a ${driver.full_name}`)}
 function openAdminCreateDriver(){
- openModal("Crear conductor",`<div class="form"><div class="row"><input id="adName" placeholder="Nombres y apellidos"><input id="adId" placeholder="Cédula"></div><div class="row"><input id="adPhone" placeholder="Celular"><input id="adUser" placeholder="Usuario"></div><div class="row"><input id="adPlate" placeholder="Placa moto"><input id="adModel" placeholder="Modelo"></div><div class="row"><select id="adType">${["Boxer","MRX","XLR","NKD","NXR","XTZ","XR","XRE","CB","FZ","Discover","Pulsar","Apache","GN","DR","Otro"].map(x=>`<option>${x}</option>`).join("")}</select><input id="adPin" maxlength="4" inputmode="numeric" placeholder="PIN 4 dígitos (opcional)"></div><div class="tiny muted">Documentos: licencia de tránsito, tarjeta de propiedad, cédula, SOAT y tecnomecánica. Puedes adjuntarlos al completar el registro.</div><button class="btn primary" onclick="createDriver()">Crear conductor</button></div>`);
+ openModal("Crear conductor",`<div class="form"><div class="row"><input id="adName" placeholder="Nombres y apellidos"><input id="adId" placeholder="Cédula"></div><div class="row"><input id="adPhone" placeholder="Celular"><input id="adUser" placeholder="Usuario"></div><input id="adEmail" type="email" placeholder="Correo exacto del usuario creado en Supabase Auth"><div class="row"><input id="adPlate" placeholder="Placa moto"><input id="adModel" placeholder="Modelo"></div><div class="row"><select id="adType">${["Boxer","MRX","XLR","NKD","NXR","XTZ","XR","XRE","CB","FZ","Discover","Pulsar","Apache","GN","DR","Otro"].map(x=>`<option>${x}</option>`).join("")}</select><input id="adPin" maxlength="4" inputmode="numeric" placeholder="PIN 4 dígitos (opcional)"></div><div class="tiny muted">Documentos: licencia de tránsito, tarjeta de propiedad, cédula, SOAT y tecnomecánica. Puedes adjuntarlos al completar el registro.</div><button class="btn primary" onclick="createDriver()">Crear conductor</button></div>`);
 }
 async function createDriver(){
- const pin=$("adPin").value.trim()||String(Math.floor(Math.random()*10000)).padStart(4,"0");
  const row={username:$("adUser").value.trim()||$("adId").value.trim(),full_name:$("adName").value.trim(),phone:$("adPhone").value.trim(),national_id:$("adId").value.trim(),plate:$("adPlate").value.trim(),bike_model:$("adModel").value.trim(),bike_type:$("adType").value};
- if(supa){const r=await rpc("create_driver",{p_username:row.username,p_pin:pin,p_full_name:row.full_name,p_phone:row.phone,p_national_id:row.national_id,p_plate:row.plate,p_bike_model:row.bike_model,p_bike_type:row.bike_type});if(r.error)return alert(r.error.message);row.id=r.data;await loadData()}else{row.id=uid();row.pin=pin;row.approved=true;row.status="offline";state.data.drivers.push(row);persistState()}
- closeModal();openModal("Conductor creado",`<p>PIN generado para ${esc(row.full_name)}:</p><div class="pin-box">${pin}</div><p class="tiny muted">El envío automático por WhatsApp requiere conectar una Edge Function o backend con la API de WhatsApp. No guardes la API key en este HTML.</p><a class="btn primary" style="display:block;text-align:center;text-decoration:none" target="_blank" href="https://wa.me/57${row.phone}?text=${encodeURIComponent("MotoGo: tu usuario es "+row.username+" y tu PIN temporal es "+pin)}">Abrir WhatsApp</a>`);
+ const authEmail=$("adEmail").value.trim(); if(!authEmail)return alert("Indica el correo del usuario existente en Supabase Auth.");
+ if(supa){const r=await rpc("create_driver",{p_auth_email:authEmail,p_username:row.username,p_full_name:row.full_name,p_phone:row.phone,p_national_id:row.national_id,p_plate:row.plate,p_bike_model:row.bike_model,p_bike_type:row.bike_type,p_approved:false});if(r.error)return alert(r.error.message);row.id=r.data;await loadData()}else{row.id=uid();row.pin="1234";row.approved=true;row.status="offline";state.data.drivers.push(row);persistState()}
+ closeModal();openModal("Conductor vinculado",`<p>${esc(row.full_name)} quedó vinculado al usuario Auth <strong>${esc(authEmail)}</strong>.</p><p class="tiny muted">El PIN/contraseña se administra desde Supabase Auth; no se guarda en tablas públicas.</p>`);
 }
 function viewDriver(id){const d=state.data.drivers.find(x=>x.id===id);openModal("Perfil de conductor",`<div class="grid g2"><div><div class="strong">${esc(d.full_name)}</div><div class="muted">${esc(d.phone||"")} · ${esc(d.national_id||"")}</div><div class="muted">${esc(d.plate||"")} · ${esc(d.bike_type||"")}</div></div><div><span class="badge ${d.approved?"green":"red"}">${d.approved?"Aprobado":"Pendiente"}</span></div></div><div class="map-holder" style="margin-top:14px"><div id="modalMap" style="height:260px;border-radius:14px"></div></div>`);setTimeout(()=>{const m=L.map("modalMap").setView([d.last_lat||11.2408,d.last_lng||-74.204],14);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(m);L.marker([d.last_lat||11.2408,d.last_lng||-74.204]).addTo(m).bindPopup(d.full_name).openPopup()},40)}
 function openTariffForm(){openModal("Nueva tarifa",`<div class="form"><div class="row"><input id="tfNeighborhood" placeholder="Barrio"><select id="tfCat">${state.data.categories.map(c=>`<option>${esc(c.code)}</option>`).join("")}</select></div><input id="tfAmount" type="number" placeholder="Valor COP"><button class="btn primary" onclick="addTariff()">Guardar</button></div>`)}
@@ -866,7 +1783,13 @@ async function deleteTariff(id){if(!confirm("Eliminar tarifa?"))return;if(supa)a
 function importTariffs(e){const f=e.target.files?.[0];if(!f)return;const reader=new FileReader();reader.onload=async()=>{const lines=String(reader.result).split(/\r?\n/).filter(Boolean);for(const line of lines.slice(1)){const [neighborhood,category_code,amount]=line.split(",").map(x=>x.trim());if(neighborhood&&category_code){const t={id:uid(),neighborhood,category_code,amount:Number(amount||0),active:true};state.data.tariffs.push(t);if(supa)await dbInsert("tariffs",t)}}persistState();render();alert("Importación completada")};reader.readAsText(f)}
 function openCategoryForm(){openModal("Nueva categoría",`<div class="form"><div class="row"><input id="cgCode" placeholder="Código (ej. MASCOTAS)"><input id="cgName" placeholder="Nombre"></div><button class="btn primary" onclick="addCategory()">Guardar</button></div>`)}
 async function addCategory(){const c={id:uid(),code:$("cgCode").value.trim().toUpperCase(),name:$("cgName").value.trim(),active:true,parameters:{}};if(!c.code||!c.name)return alert("Completa los campos");if(supa)await dbInsert("categories",c);state.data.categories.push(c);persistState();closeModal();render()}
-function previewMedia(e){const files=[...(e.target.files||[])];$("mediaPreview").innerHTML=files.map(f=>{const u=URL.createObjectURL(f);return`<div class="card">${f.type.startsWith("video")?`<video src="${u}" controls style="width:100%;border-radius:12px"></video>`:`<img src="${u}" style="width:100%;border-radius:12px">`}<div class="tiny muted" style="margin-top:8px">${esc(f.name)}</div></div>`}).join("")}
+let pendingMediaFiles=[];
+function previewMedia(e){pendingMediaFiles=[...(e.target.files||[])];$("mediaPreview").innerHTML=pendingMediaFiles.map(f=>{const u=URL.createObjectURL(f);return`<div class="card">${f.type.startsWith("video")?`<video src="${u}" controls style="width:100%;border-radius:12px"></video>`:`<img src="${u}" style="width:100%;border-radius:12px">`}<div class="tiny muted" style="margin-top:8px">${esc(f.name)}</div></div>`}).join("")}
+async function uploadSelectedMedia(){
+ if(!supa||state.role!=="admin")return alert("Debes estar autenticado como admin.");if(!pendingMediaFiles.length)return alert("Selecciona archivos.");
+ for(const f of pendingMediaFiles){const path=`admin/${Date.now()}-${safeFileName(f.name)}`;const up=await storageUpload("media",path,f);if(up.error)return alert(up.error.message);const url=await storagePublicUrl("media",path);const kind=f.type.startsWith("video")?"video":"image";const r=await dbInsert("media_assets",{name:f.name,kind,url,storage_path:path,active:true});if(r.error)return alert(r.error.message)}
+ pendingMediaFiles=[];await loadData();render();alert("Archivos subidos a Storage.");
+}
 function setupMap(elId,points=[]){
  if(!window.L||!document.getElementById(elId))return;
  if(state.maps[elId]){state.maps[elId].remove();delete state.maps[elId]}
@@ -880,14 +1803,14 @@ function setupAdminMap(){const pts=state.data.drivers.filter(d=>d.last_lat).map(
 function setupClientMap(){setupMap("mapClient",[])}
 function renderClientMap(id){const s=state.data.services.find(x=>x.id===id);openModal("GPS del servicio",`<div id="serviceMap" style="height:400px;border-radius:16px"></div>`);setTimeout(()=>{const pts=[];if(s.pickup_lat)pts.push({lat:Number(s.pickup_lat),lng:Number(s.pickup_lng),label:"Recogida"});if(s.last_driver_lat)pts.push({lat:Number(s.last_driver_lat),lng:Number(s.last_driver_lng),label:"Conductor"});setupMap("serviceMap",pts)},40)}
 function startDriverGPS(){
- const p=state.session?.profile;if(state.role!=="driver"||!p||!navigator.geolocation)return;
+ const p=state.session?.profile;if(state.role!=="driver"||!p||!navigator.geolocation||!supa)return;
  if(state.watchers.driver)return;
  state.watchers.driver=navigator.geolocation.watchPosition(async pos=>{
-   p.last_lat=pos.coords.latitude;p.last_lng=pos.coords.longitude;state.session.profile=p;localStorage.setItem(LS.session,JSON.stringify(state.session));
-   const active=serviceForDriver();
-   if(supa){await dbUpdate("drivers",p.id,{last_lat:p.last_lat,last_lng:p.last_lng,last_gps_at:new Date().toISOString()});if(active){await dbUpdate("services",active.id,{last_driver_lat:p.last_lat,last_driver_lng:p.last_lng,last_driver_gps_at:new Date().toISOString()});await dbInsert("driver_locations",{driver_id:p.id,service_id:active.id,lat:p.last_lat,lng:p.last_lng,accuracy:pos.coords.accuracy})}}
-   else {state.data.drivers=state.data.drivers.map(d=>d.id===p.id?{...d,last_lat:p.last_lat,last_lng:p.last_lng}:d);if(active){active.last_driver_lat=p.last_lat;active.last_driver_lng=p.last_lng}persistState()}
- },()=>{}, {enableHighAccuracy:true,maximumAge:5000,timeout:10000});
+   const active=serviceForDriver(); const lat=pos.coords.latitude,lng=pos.coords.longitude; p.last_lat=lat;p.last_lng=lng;state.session.profile=p;localStorage.setItem(LS.session,JSON.stringify(state.session));
+   const r=await rpc("record_driver_location",{p_service_id:active?.id||null,p_lat:lat,p_lng:lng,p_accuracy:pos.coords.accuracy,p_speed:null,p_heading:null});
+   if(r.error)console.warn("GPS RPC",r.error); else {const loc=r.data;state.data.locations.push(loc);if(active){active.last_driver_lat=lat;active.last_driver_lng=lng;active.last_driver_gps_at=new Date().toISOString();}}
+   if(state.nav==="home")setupDriverMap();
+ },err=>console.warn("GPS",err), {enableHighAccuracy:true,maximumAge:5000,timeout:10000});
 }
 async function ensureDriverDailyFace(){
  const key=today()+"_"+state.session.profile.id;
@@ -930,17 +1853,32 @@ function beep(){
 function speak(text){try{const u=new SpeechSynthesisUtterance(text);u.lang="es-CO";u.rate=.95;u.pitch=1;u.volume=1;speechSynthesis.cancel();speechSynthesis.speak(u)}catch{}}
 function notifyStrong(title,body){beep();speak(body);if("Notification"in window&&Notification.permission==="granted")new Notification(title,{body});}
 function subscribeRealtime(){
- if(!supa)return;
+ if(!supa||state.realtimeChannel)return;
  try{
-  supa.channel("motogo-live").on("postgres_changes",{event:"*",schema:"public",table:"services"},payload=>{loadData().then(render);if(payload.eventType==="INSERT"||payload.eventType==="UPDATE")notifyStrong("Actualización de servicio","Hay cambios en un servicio")}).subscribe();
- }catch(e){console.warn(e)}
+  const channel=supa.channel("motogo-live");
+  const refresh=async(payload)=>{
+    await loadData();
+    if(state.role==="client"&&payload.table==="driver_locations") renderClient(); else render();
+    if(payload.eventType==="INSERT"||payload.eventType==="UPDATE") notifyStrong("MotoGo en tiempo real","Hay una actualización nueva");
+  };
+  channel.on("postgres_changes",{event:"*",schema:"public",table:"services"},p=>refresh(p));
+  channel.on("postgres_changes",{event:"*",schema:"public",table:"messages"},p=>{loadData().then(()=>{if($("chatBox"))refreshChat(state.currentChatId);if($("adminChatBox"))renderChat("admin");});});
+  channel.on("postgres_changes",{event:"*",schema:"public",table:"driver_locations"},p=>refresh({...p,table:"driver_locations"}));
+  channel.on("postgres_changes",{event:"*",schema:"public",table:"drivers"},p=>refresh(p));
+  channel.subscribe((status)=>console.log("MotoGo Realtime:",status));
+  state.realtimeChannel=channel;
+ }catch(e){console.warn("Realtime no disponible",e)}
 }
 async function boot(){
- ensureDemo(); await loadData();
- const stored=localStorage.getItem(LS.session);
- if(stored){try{state.session=JSON.parse(stored)}catch{}}
- if(state.session){$("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");state.role=state.session.role;await afterLogin()}else setRole("driver");
- if("Notification"in window && Notification.permission==="default"){}
+ ensureDemo();
+ if(supa){
+   const {data:{session}}=await supa.auth.getSession();
+   if(session?.user){await loadData();await refreshAuthProfile();}
+   supa.auth.onAuthStateChange((event,sessionNow)=>{state.authUser=sessionNow?.user||null;});
+ }
+ if(state.session){$("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");await afterLogin();}
+ else setRole(localStorage.getItem("motogo_role")||"driver");
+ if("Notification"in window&&Notification.permission==="default"){}
 }
 boot();
 </script>
