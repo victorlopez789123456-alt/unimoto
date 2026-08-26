@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="es">
 <head>
@@ -50,18 +51,18 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
     </section>
     <section class="login-card">
       <div class="role-switch">
-        <button id="roleDriver">Conductor</button>
+        <button id="roleDriver" class="active">Conductor</button>
         <button id="roleClient">Cliente</button>
-        <button id="roleAdmin" class="active">Admin</button>
+        <button id="roleAdmin">Admin</button>
       </div>
       <div class="form">
-        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="admin" autocomplete="username" value="admin"></div>
-        <div><label class="tiny muted">Contraseña</label><input id="loginPin" type="password" maxlength="64" autocomplete="current-password" placeholder="Contraseña" value="12"></div>
+        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="admin" autocomplete="username"></div>
+        <div><label class="tiny muted">Contraseña</label><input id="loginPin" type="password" maxlength="64" autocomplete="current-password" placeholder="Contraseña"></div>
         <button class="btn primary block" id="loginBtn">Ingresar</button>
         <button class="btn ghost block hidden" id="registerClientBtn">Registro</button>
         <button class="btn ghost block hidden" id="recoverBtn">Recuperar</button>
       </div>
-      <div id="loginInfo" class="tiny muted" style="margin-top:14px"></div>
+      <div id="loginInfo" class="tiny muted" style="margin-top:14px"></div><div class="tiny warning" style="margin-top:10px">Admin local: las credenciales están visibles en el código del index.html.</div><div class="tiny warning" style="margin-top:10px">Admin local: credenciales incluidas en el HTML. No usar este modo para producción.</div>
     </section>
   </div>
 </div>
@@ -101,12 +102,12 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
      coloque aquí service_role keys ni secretos de terceros.
    ========================================================= */
 const CONFIG = {
-  SUPABASE_URL: "https://njvzlgcsizroyzfojlus.supabase.co",
-  SUPABASE_PUBLISHABLE_KEY: "",
-  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qdnpsZ2NzaXpyb3l6Zm9qbHVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NzczMTYsImV4cCI6MjEwMzM1MzMxNn0.b6aArILZS_aFHgri450Wh0bFH52J5kY3y3cLvUxRAag",
+  SUPABASE_URL: "https://wptknyzadqtadcfxhltf.supabase.co",
+  SUPABASE_PUBLISHABLE_KEY: "sb_publishable_i4szch1dJd6pso-VcnaGeQ_mZNFzNBE",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwdGtueXphZHF0YWRjZnhobHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3Njg5NTksImV4cCI6MjEwMzM0NDk1OX0.xQLqYc0lOZLz9HR2WMifxs1t1V95cEeshOFt-kTUxq4",
   APP_NAME: "MotoGo",
   ADMIN_USER: "admin",
-  ADMIN_PIN: "12",
+  ADMIN_PASSWORD: "12",
   FACE_THRESHOLD: 0.52,
   FACE_MODEL_URL: "https://justadudewhohacks.github.io/face-api.js/models"
 };
@@ -120,7 +121,7 @@ const CONFIG = {
    ========================================================= */
 const SETUP_SQL = String.raw`-- ============================================================
 -- MOTOGO — SCHEMA FINAL ESTABLE
--- Proyecto: https://njvzlgcsizroyzfojlus.supabase.co
+-- Proyecto: https://wptknyzadqtadcfxhltf.supabase.co
 --
 -- Acceso MotoGo:
 --   ADMIN     usuario: admin  contraseña inicial: 12
@@ -993,7 +994,7 @@ const LS = {
   notif:"motogo_notif_v1"
 };
 const state = {
-  role:"admin", session:null, nav:"home", maps:{}, watchers:{}, faceReady:false,
+  role:"driver", session:null, nav:"home", maps:{}, watchers:{}, faceReady:false,
   data:{drivers:[],clients:[],categories:[],tariffs:[],services:[],messages:[],locations:[],media:[]},
   realtimeChannel:null, realtimeConnected:false, authUser:null
 };
@@ -1034,6 +1035,14 @@ async function loadData(){
   ensureDemo();
   if(!supa) return;
   try {
+    if(state.role==='admin'){
+      const snap=await supa.rpc('admin_dashboard_snapshot');
+      if(snap.error) throw snap.error;
+      const d=snap.data||{};
+      state.data.drivers=d.drivers||[];state.data.clients=d.clients||[];state.data.categories=d.categories||[];state.data.tariffs=d.tariffs||[];
+      state.data.services=d.services||[];state.data.messages=d.messages||[];state.data.media=d.media||[];state.data.locations=d.locations||[];
+      return;
+    }
     const [drivers,clients,categories,tariffs,services,messages,media,locations]=await Promise.all([
       dbSelect("drivers"),dbSelect("clients"),dbSelect("categories"),dbSelect("tariffs"),
       dbSelect("services",{select:"*,drivers:driver_id(full_name),clients:client_id(full_name)"}),
@@ -1098,6 +1107,12 @@ async function refreshAppSession(){
   localStorage.setItem(LS.session,JSON.stringify(state.session));
   return true;
 }
+let localAdminPassword=CONFIG.ADMIN_PASSWORD;
+function changeLocalAdminPassword(){
+  openModal("Cambiar contraseña de Admin",`<div class="form"><div class="tiny muted warning">Esta contraseña está en el index.html. Cambiarla aquí solo dura durante esta sesión. Para hacerla permanente, edita CONFIG.ADMIN_PASSWORD y vuelve a publicar la página.</div><input id="newAdminPassword" type="password" maxlength="64" placeholder="Nueva contraseña"><input id="confirmAdminPassword" type="password" maxlength="64" placeholder="Repetir contraseña"><button class="btn primary" onclick="saveLocalAdminPassword()">Guardar</button></div>`);
+}
+function saveLocalAdminPassword(){const a=$("newAdminPassword").value,b=$("confirmAdminPassword").value;if(a.length<4)return alert("La contraseña debe tener al menos 4 caracteres.");if(a!==b)return alert("Las contraseñas no coinciden.");localAdminPassword=a;CONFIG.ADMIN_PASSWORD=a;closeModal();alert("Contraseña cambiada en esta sesión. Para que permanezca después de recargar, actualiza ADMIN_PASSWORD en el index.html y vuelve a publicar.");}
+
 function setRole(role){
   state.role=role;
   ['driver','client','admin'].forEach(r=>$('role'+r.charAt(0).toUpperCase()+r.slice(1)).classList.toggle('active',role===r));
@@ -1111,26 +1126,37 @@ $('roleDriver').onclick=()=>setRole('driver'); $('roleClient').onclick=()=>setRo
 async function login(){
   const u=$('loginUser').value.trim(), p=$('loginPin').value;
   if(!u||!p){$('loginInfo').textContent='Completa usuario y contraseña.';return;}
+
+  if(state.role==='admin'){
+    if(u!==CONFIG.ADMIN_USER || p!==localAdminPassword){$('loginInfo').textContent='Usuario o contraseña de administrador incorrectos.';return;}
+    if(supa){
+      const anonUser=await ensureAnonymousAuth();
+      if(!anonUser){$('loginInfo').textContent='No fue posible iniciar la sesión técnica de Supabase.';return;}
+      state.authUser=anonUser;
+    }
+    state.session={role:'admin',token:'local-admin',profile:{id:'local-admin',role:'admin',full_name:'Administrador'}};
+    localStorage.setItem(LS.session,JSON.stringify(state.session));localStorage.setItem('motogo_role','admin');
+    $('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');
+    await afterLogin();
+    return;
+  }
+
   if(!supa){$('loginInfo').textContent='Supabase no está disponible.';return;}
-  $('loginInfo').textContent='Validando credenciales de MotoGo…';
+  $('loginInfo').textContent='Validando credenciales…';
   const anonUser=await ensureAnonymousAuth();
   if(!anonUser){$('loginInfo').textContent='No fue posible iniciar la sesión técnica.';return;}
   const r=await supa.rpc('motogo_login',{p_role:state.role,p_username:u,p_password:p});
   if(r.error||!r.data?.length){
     const msg=String(r.error?.message||'');
-    $('loginInfo').textContent=msg.includes('account_locked')?'Cuenta bloqueada temporalmente.':'Usuario o contraseña incorrectos.';
+    $('loginInfo').textContent=msg.includes('account_locked')?'Cuenta bloqueada temporalmente.':msg.includes('driver_not_approved')?'Conductor pendiente de aprobación.':'Usuario o contraseña incorrectos.';
     return;
   }
-  const p0=r.data[0]; await loadData();
-  let profile=null;
-  if(state.role==='driver') profile=state.data.drivers.find(d=>d.profile_id===p0.profile_id)||null;
-  if(state.role==='client') profile=state.data.clients.find(c=>c.profile_id===p0.profile_id)||null;
-  if(state.role==='admin') profile={id:p0.profile_id,full_name:p0.full_name,phone:p0.phone,email:p0.email,role:'admin'};
+  const p0=r.data[0];await loadData();
+  let profile=state.role==='driver'?state.data.drivers.find(d=>d.profile_id===p0.profile_id):state.data.clients.find(c=>c.profile_id===p0.profile_id);
   if(!profile){$('loginInfo').textContent='El usuario no tiene un registro MotoGo válido.';return;}
-  state.session={role:state.role,token:'anonymous-auth',profile}; state.authUser=anonUser;
-  localStorage.setItem(LS.session,JSON.stringify(state.session)); localStorage.setItem('motogo_role',state.role);
-  $('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');
-  await afterLogin();
+  state.session={role:state.role,token:'anonymous-auth',profile};state.authUser=anonUser;
+  localStorage.setItem(LS.session,JSON.stringify(state.session));localStorage.setItem('motogo_role',state.role);
+  $('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');await afterLogin();
 }
 $('loginBtn').onclick=login;
 $('loginPin').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
@@ -1151,7 +1177,7 @@ async function logout(){
   state.realtimeChannel=null; state.realtimeConnected=false;
   if(supa){try{await supa.rpc('motogo_logout')}catch{};try{await supa.auth.signOut({scope:'local'})}catch{}}
   localStorage.removeItem(LS.session);state.session=null;state.authUser=null;
-  $('app').classList.add('hidden');$('loginScreen').classList.remove('hidden');setRole(localStorage.getItem('motogo_role')||'admin');
+  $('app').classList.add('hidden');$('loginScreen').classList.remove('hidden');setRole(localStorage.getItem('motogo_role')||'driver');
 }
 $('logoutBtn').onclick=logout;
 
@@ -1161,12 +1187,12 @@ function renderNav(){
     ["home","🏠","Inicio"],["services","🛵","Servicios"],["fares","💵","Tarifas"],["history","🧾","Historial"],["profile","👤","Perfil"],["chatAdmin","💬","Admin"]
   ];
   if(state.role==="client") items=[["home","🏠","Inicio"],["newService","➕","Nuevo servicio"],["active","🛵","Servicio activo"],["history","🧾","Historial"],["chatAdmin","💬","Admin"],["profile","👤","Perfil"]];
-  if(state.role==="admin") items=[["dashboard","📊","Dashboard"],["services","🧾","Servicios"],["drivers","🛵","Conductores"],["clients","👥","Clientes"],["tariffs","💵","Tarifas"],["categories","🧩","Categorías"],["chats","💬","Chats"],["media","🖼️","Publicidad"],["sql","🗄️","SQL Supabase"]];
+  if(state.role==="admin") items=[["dashboard","📊","Dashboard"],["services","🧾","Servicios"],["drivers","🛵","Conductores"],["clients","👥","Clientes"],["tariffs","💵","Tarifas"],["categories","🧩","Categorías"],["chats","💬","Chats"],["media","🖼️","Publicidad"],["sql","🗄️","SQL Supabase"],["adminPassword","🔑","Contraseña"]];
   $("sidebarNav").innerHTML=items.map(([id,ic,t])=>`<button class="${state.nav===id?"active":""}" onclick="go('${id}')">${ic} ${t}</button>`).join("");
   $("mobileNav").innerHTML=items.slice(0,5).map(([id,ic,t])=>`<button class="${state.nav===id?"active":""}" onclick="go('${id}')">${ic}<br>${t}</button>`).join("");
 }
 function go(n){state.nav=n;renderNav();render()}
-function render(){if(state.role==="driver")renderDriver();if(state.role==="client")renderClient();if(state.role==="admin")renderAdmin()}
+function render(){if(state.role==="driver")renderDriver();if(state.role==="client")renderClient();if(state.role==="admin"){if(state.nav==="adminPassword")changeLocalAdminPassword();else renderAdmin();}}
 
 function serviceForDriver(){return state.data.services.find(s=>s.driver_id===state.session?.profile?.id && ["assigned","accepted","in_progress"].includes(s.status))}
 function serviceForClient(){return state.data.services.find(s=>s.client_id===state.session?.profile?.id && ["waiting","assigned","accepted","in_progress"].includes(s.status))}
@@ -1641,8 +1667,8 @@ async function boot(){
   if(supa){
     const restored=await refreshAppSession();
     if(restored){$('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');await afterLogin();}
-    else setRole(localStorage.getItem('motogo_role')||'admin');
-  }else setRole(localStorage.getItem('motogo_role')||'admin');
+    else setRole(localStorage.getItem('motogo_role')||'driver');
+  }else setRole(localStorage.getItem('motogo_role')||'driver');
 }
 boot();
 </script>
@@ -1655,7 +1681,7 @@ NOTAS TÉCNICAS PARA PRODUCCIÓN
 3) La biometría facial es dato sensible: use HTTPS, consentimiento, cifrado/políticas de retención y RLS.
 4) El SQL incluido crea funciones RPC para PINs y sesiones de aplicación. Ajuste RLS antes de producción.
 5) Los modelos de face-api.js se descargan del endpoint público de modelos. Para producción, autohospédelos en tu propio dominio.
-6) Si quieres cambiar el proyecto Supabase, reemplaza CONFIG.SUPABASE_URL y CONFIG.SUPABASE_ANON_KEY.
+6) El Admin de esta versión se autentica localmente en el HTML; cualquier persona con acceso al código fuente puede conocer las credenciales. Para producción, usa un backend/Edge Function o Supabase Auth para Admin.
 -->
 </body>
 </html>
