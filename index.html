@@ -17,7 +17,7 @@
 button,input,select,textarea{font:inherit} button{cursor:pointer;border:0}.hidden{display:none!important}.muted{color:var(--muted)}.tiny{font-size:12px}.small{font-size:14px}.strong{font-weight:800}.danger{color:var(--danger)}.ok{color:var(--brand)}.warning{color:var(--warn)}
 .app{min-height:100vh}.topbar{height:68px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid var(--line);background:rgba(11,16,32,.86);backdrop-filter:blur(12px);position:sticky;top:0;z-index:20}
 .logo{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:.3px}.logo-badge{width:34px;height:34px;border-radius:12px;background:linear-gradient(135deg,var(--brand),#b5ffd9);display:grid;place-items:center;color:#07130e;font-weight:900}
-.top-actions{display:flex;align-items:center;gap:8px}.pill{padding:8px 12px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:#dbeafe}
+.top-actions{display:flex;align-items:center;gap:8px}.pill{padding:8px 12px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:#dbeafe}.db-status{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:800}.db-dot{width:10px;height:10px;border-radius:50%;display:inline-block;background:#64748b;box-shadow:0 0 0 4px rgba(100,116,139,.14)}.db-status.connected .db-dot{background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.15)}.db-status.checking .db-dot{background:#eab308;box-shadow:0 0 0 4px rgba(234,179,8,.15)}.db-status.disconnected .db-dot{background:#ef4444;box-shadow:0 0 0 4px rgba(239,68,68,.15)}
 .layout{display:grid;grid-template-columns:250px 1fr;min-height:calc(100vh - 68px)}.sidebar{padding:18px;border-right:1px solid var(--line);background:rgba(8,12,24,.75)}.nav{display:grid;gap:8px}.nav button{width:100%;text-align:left;background:transparent;color:#cbd5e1;border:1px solid transparent;padding:12px 14px;border-radius:14px}.nav button.active,.nav button:hover{background:var(--panel2);border-color:var(--line);color:#fff}.content{padding:20px;min-width:0}.view{max-width:1600px;margin:auto}.grid{display:grid;gap:16px}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.card{background:linear-gradient(180deg,rgba(23,32,51,.97),rgba(15,23,42,.97));border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow)}.card h3,.card h4{margin:0 0 8px}.stat{font-size:32px;font-weight:900}.label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
 .btn{padding:11px 15px;border-radius:13px;background:#23304a;color:#fff;border:1px solid #31405b;font-weight:800}.btn:hover{filter:brightness(1.08)}.btn.primary{background:var(--brand);color:#06160e;border-color:transparent}.btn.warn{background:var(--warn);color:#1c1300;border-color:transparent}.btn.danger{background:#3a1d28;color:#ffd7de;border-color:#6e2939}.btn.ghost{background:transparent}.btn.block{width:100%}
 input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid #334155;border-radius:12px;padding:11px 12px;outline:none}input:focus,select:focus,textarea:focus{border-color:var(--brand)}.form{display:grid;gap:10px}.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
@@ -63,6 +63,7 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
         <button class="btn ghost block hidden" id="recoverBtn">Recuperar</button>
       </div>
       <div id="loginInfo" class="tiny muted" style="margin-top:14px"></div>
+      <div class="tiny muted" style="margin-top:10px">Admin de prueba: <strong>admin</strong> / <strong>1234</strong></div>
     </section>
   </div>
 </div>
@@ -71,7 +72,7 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
   <div class="topbar">
     <div class="logo"><div class="logo-badge">M</div> MotoGo</div>
     <div class="top-actions">
-      <span id="sessionBadge" class="pill small">Sin sesión</span>
+      <span id="sessionBadge" class="pill small">Sin sesión</span><span id="dbStatus" class="db-status checking" title="Comprobando conexión"><span class="db-dot"></span><span id="dbStatusText">Verificando…</span></span>
       <button class="btn ghost" id="notifBtn">🔔</button>
       <button class="btn" id="logoutBtn">Salir</button>
     </div>
@@ -1244,6 +1245,10 @@ async function rpc(name,args){
   if(!supa) return {data:null,error:{message:"demo"}};
   return await supa.rpc(name,args);
 }
+function setDbStatus(status,text){const el=$("dbStatus"),label=$("dbStatusText");if(!el||!label)return;el.classList.remove("connected","checking","disconnected");el.classList.add(status);label.textContent=text;el.title=status==="connected"?"Conexión con Supabase activa":status==="checking"?"Verificando conexión con Supabase":"Sin conexión con Supabase";}
+async function checkDatabaseConnection(){if(!supa){setDbStatus("disconnected","Sin conexión");return false}setDbStatus("checking","Verificando…");try{const {error}=await supa.from("categories").select("id",{head:true,count:"exact"});if(error)throw error;setDbStatus("connected","Base de datos conectada");return true}catch(e){console.warn("Estado DB:",e);setDbStatus("disconnected","Sin conexión");return false}}
+let dbStatusTimer=null;function startDatabaseMonitor(){checkDatabaseConnection();if(dbStatusTimer)clearInterval(dbStatusTimer);dbStatusTimer=setInterval(checkDatabaseConnection,30000);}
+
 function authPassword(pin){return `MotoGo#${String(pin).trim()}#2026!`}
 function safeFileName(name){return String(name||"archivo").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-zA-Z0-9._-]+/g,"_")}
 async function storageUpload(bucket,path,file){
@@ -1301,10 +1306,15 @@ async function login(){
   $('loginInfo').textContent='Validando credenciales de MotoGo…';
   const anonUser=await ensureAnonymousAuth();
   if(!anonUser){$('loginInfo').textContent='No fue posible iniciar la sesión técnica.';return;}
-  const r=await supa.rpc('motogo_login',{p_role:state.role,p_username:u,p_password:p});
+  const r=await supa.rpc('motogo_login',{p_role:String(state.role).toLowerCase(),p_username:u,p_password:p});
   if(r.error||!r.data?.length){
     const msg=String(r.error?.message||'');
-    $('loginInfo').textContent=msg.includes('account_locked')?'Cuenta bloqueada temporalmente.':'Usuario o contraseña incorrectos.';
+    console.warn('MotoGo login RPC:', r.error || r.data);
+    if(msg.includes('account_locked')) $('loginInfo').textContent='Cuenta bloqueada temporalmente.';
+    else if(msg.includes('driver_not_approved')) $('loginInfo').textContent='El conductor aún no ha sido aprobado por el administrador.';
+    else if(msg.includes('anonymous_auth_required')) $('loginInfo').textContent='No hay sesión técnica activa. Recarga la página e inténtalo de nuevo.';
+    else if(msg.includes('PGRST') || msg.includes('function') || msg.includes('schema') || msg.includes('permission')) $('loginInfo').textContent='Error de configuración de Supabase: '+msg;
+    else $('loginInfo').textContent='Usuario o contraseña incorrectos.';
     return;
   }
   const p0=r.data[0]; await loadData();
@@ -1792,7 +1802,7 @@ async function subscribeRealtime(){
 
   state.realtimeChannel=channel;
   channel.subscribe(async(status)=>{
-    console.log("MotoGo Realtime:",status);
+    console.log("MotoGo Realtime:",status); if(status==="SUBSCRIBED") setDbStatus("connected","Conexión activa"); else if(status==="CHANNEL_ERROR"||status==="TIMED_OUT"||status==="CLOSED") checkDatabaseConnection();
     if(status==="SUBSCRIBED"){
       state.realtimeConnected=true;
       return;
@@ -1812,6 +1822,7 @@ async function subscribeRealtime(){
 }
 async function boot(){
   ensureDemo();
+  startDatabaseMonitor();
   if(supa){
     const restored=await refreshAppSession();
     if(restored){$('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');await afterLogin();}
