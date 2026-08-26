@@ -56,7 +56,7 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
         <button id="roleAdmin">Admin</button>
       </div>
       <div class="form">
-        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="Ej. admin-motogo" autocomplete="username"></div>
+        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="admin" autocomplete="username"></div>
         <div><label class="tiny muted">Contraseña</label><input id="loginPin" type="password" maxlength="64" autocomplete="current-password" placeholder="Contraseña"></div>
         <button class="btn primary block" id="loginBtn">Ingresar</button>
         <button class="btn ghost block hidden" id="registerClientBtn">Registro</button>
@@ -107,7 +107,7 @@ const CONFIG = {
   SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwdGtueXphZHF0YWRjZnhobHRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3Njg5NTksImV4cCI6MjEwMzM0NDk1OX0.xQLqYc0lOZLz9HR2WMifxs1t1V95cEeshOFt-kTUxq4",
   APP_NAME: "MotoGo",
   ADMIN_USER: "admin",
-  ADMIN_PIN: "12",
+  ADMIN_PIN: "1234",
   FACE_THRESHOLD: 0.52,
   FACE_MODEL_URL: "https://justadudewhohacks.github.io/face-api.js/models"
 };
@@ -1121,7 +1121,7 @@ returns jsonb
 language plpgsql security definer
 set search_path = public, private, extensions
 as $$
-declare v_profile uuid; v_username text := 'admin-motogo'; v_password text; v_hash text;
+declare v_profile uuid; v_username text := 'admin'; v_password text := '1234'; v_hash text;
 begin
   if exists(select 1 from public.profiles where role='admin') then raise exception 'admin_already_exists'; end if;
   v_password := upper(substr(encode(gen_random_bytes(12),'hex'),1,6)) || '-' || upper(substr(encode(gen_random_bytes(12),'hex'),1,6));
@@ -1542,10 +1542,10 @@ function renderAdminDrivers(){
 }
 function renderAdminClients(){
  const c=state.data.clients.sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
- $('view').innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Clientes</h2><div class="muted">Las credenciales se generan automáticamente; el administrador puede restablecerlas.</div></div><button class="btn primary" onclick="openAdminCreateClient()">Crear cliente</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Usuario</th><th>Documento</th><th>Teléfono</th><th>Servicios</th><th>Acciones</th></tr></thead><tbody>${c.map(x=>{const rows=state.data.services.filter(s=>s.client_id===x.id);return`<tr><td>${esc(x.full_name)}</td><td>${esc(x.login||'')}</td><td>${esc(x.national_id||'')}</td><td>${esc(x.phone||'')}</td><td>${rows.length}</td><td><button class="btn" onclick="resetUserPassword('${x.profile_id}','Cliente')">Restablecer contraseña</button></td></tr>`}).join('')}</tbody></table></div>`;
+ $('view').innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Clientes</h2><div class="muted">Crea clientes con usuario y contraseña automáticos, o restablece sus credenciales.</div></div><button class="btn primary" onclick="openAdminCreateClient()">➕ Crear cliente</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Usuario</th><th>Documento</th><th>Teléfono</th><th>Servicios</th><th>Acciones</th></tr></thead><tbody>${c.map(x=>{const rows=state.data.services.filter(s=>s.client_id===x.id);return`<tr><td>${esc(x.full_name)}</td><td>${esc(x.login||'')}</td><td>${esc(x.national_id||'')}</td><td>${esc(x.phone||'')}</td><td>${rows.length}</td><td><button class="btn warn" onclick="resetUserPassword('${x.profile_id}','Cliente')">🔑 Restablecer contraseña</button></td></tr>`}).join('')}</tbody></table></div>`;
 }
 function openAdminCreateClient(){
- openModal('Crear cliente',`<div class="form"><div class="row"><input id="acName" placeholder="Nombre completo"><input id="acId" placeholder="Cédula"></div><input id="acPhone" placeholder="Celular"><div class="card"><strong>Credenciales automáticas</strong><div class="tiny muted" style="margin-top:6px">MotoGo generará automáticamente un usuario único y una contraseña segura.</div></div><button class="btn primary" onclick="createClientByAdmin()">Generar y crear cliente</button></div>`);
+ openModal('Crear cliente',`<div class="form"><div class="row"><input id="acName" placeholder="Nombre completo"><input id="acId" placeholder="Cédula"></div><input id="acPhone" placeholder="Celular"><div class="card"><strong>Credenciales automáticas</strong><div class="tiny muted" style="margin-top:6px">MotoGo generará automáticamente un usuario único y una contraseña segura.</div></div><button class="btn primary" onclick="createClientByAdmin()">🔐 Generar usuario y contraseña</button></div>`);
 }
 async function createClientByAdmin(){
  const row={full_name:$('acName').value.trim(),phone:$('acPhone').value.trim(),national_id:$('acId').value.trim()};
@@ -1583,7 +1583,7 @@ function renderAdminMedia(){
  $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Publicidad</h2><div class="muted">Imágenes y videos que podrá mostrar el cliente/conductor.</div></div></div><div class="card"><label class="btn">Seleccionar imágenes/videos<input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden onchange="previewMedia(event)"></label><button class="btn primary" style="margin-left:8px" onclick="uploadSelectedMedia()">Subir a Storage</button><div id="mediaPreview" class="grid g3" style="margin-top:14px"></div><p class="tiny muted">Los archivos se guardan en el bucket público <strong>media</strong>.</p></div><div class="grid g3" style="margin-top:16px">${state.data.media.map(m=>`<div class="card"><div class="strong">${esc(m.name||"Publicidad")}</div><div class="tiny muted">${esc(m.kind||"")}</div><a class="small" href="${esc(m.url)}" target="_blank">Abrir</a></div>`).join("")}</div>`;
 }
 function renderAdminSQL(){
- $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Instalación Supabase</h2><div class="muted">Copia el esquema completo al SQL Editor de Supabase y ejecútalo.</div></div><button class="btn primary" onclick="navigator.clipboard.writeText(SETUP_SQL);alert('SQL copiado')">Copiar SQL</button></div><div class="card"><textarea style="height:520px;font-family:ui-monospace,monospace;font-size:12px">${esc(SETUP_SQL)}</textarea></div><div class="card" style="margin-top:16px"><strong>Instalación:</strong> primero ejecuta el SQL, luego genera el admin mediante bootstrap_admin_auto; después el admin crea clientes y conductores desde la app. <strong>Nota de seguridad:</strong> la clave anon/publishable puede ir en frontend. No coloques nunca una service_role key aquí. El envío de WhatsApp debe hacerse mediante un backend o Edge Function para proteger la API key.</div>`;
+ $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Instalación Supabase</h2><div class="muted">Copia el esquema completo al SQL Editor de Supabase y ejecútalo.</div></div><button class="btn primary" onclick="navigator.clipboard.writeText(SETUP_SQL);alert('SQL copiado')">Copiar SQL</button></div><div class="card"><textarea style="height:520px;font-family:ui-monospace,monospace;font-size:12px">${esc(SETUP_SQL)}</textarea></div><div class="card" style="margin-top:16px"><strong>Instalación:</strong> primero ejecuta el SQL. El administrador queda configurado como usuario <code>admin</code> y contraseña <code>1234</code>. Después el admin crea clientes y conductores desde la app. <strong>Nota de seguridad:</strong> la clave anon/publishable puede ir en frontend. No coloques nunca una service_role key aquí. El envío de WhatsApp debe hacerse mediante un backend o Edge Function para proteger la API key.</div>`;
 }
 
 async function toggleDriverStatus(){
@@ -1677,7 +1677,7 @@ async function createDriver(){
 }
 function showGeneratedCredentials(title,out){
  const user=String(out?.username||''); const pass=String(out?.password||'');
- openModal(title,`<div class="card"><div class="strong">${esc(out?.full_name||'Cuenta MotoGo')}</div><div class="label" style="margin-top:14px">Usuario</div><div class="strong" style="font-size:20px">${esc(user)}</div><div class="label" style="margin-top:14px">Contraseña temporal</div><div class="strong" style="font-size:20px;letter-spacing:2px">${esc(pass)}</div><div class="service-actions" style="margin-top:14px"><button class="btn" onclick="copyText('${user}')">Copiar usuario</button><button class="btn" onclick="copyText('${pass}')">Copiar contraseña</button></div></div><p class="tiny muted">Guarda estas credenciales y entrégalas al usuario. La contraseña se muestra una sola vez.</p><button class="btn primary block" onclick="closeModal()">Listo</button>`);
+ openModal(title,`<div class="card"><div class="strong">${esc(out?.full_name||'Cuenta MotoGo')}</div><div class="label" style="margin-top:14px">Usuario</div><div class="strong" style="font-size:20px">${esc(user)}</div><div class="label" style="margin-top:14px">Nueva contraseña</div><div class="strong" style="font-size:20px;letter-spacing:2px">${esc(pass)}</div><div class="service-actions" style="margin-top:14px"><button class="btn" onclick="copyText('${user}')">Copiar usuario</button><button class="btn" onclick="copyText('${pass}')">Copiar contraseña</button></div></div><p class="tiny muted">Guarda estas credenciales y entrégalas al usuario. Por seguridad, la nueva contraseña se muestra únicamente en esta ventana.</p><button class="btn primary block" onclick="closeModal()">Listo</button>`);
 }
 function viewDriver(id){const d=state.data.drivers.find(x=>x.id===id);openModal("Perfil de conductor",`<div class="grid g2"><div><div class="strong">${esc(d.full_name)}</div><div class="muted">${esc(d.phone||"")} · ${esc(d.national_id||"")}</div><div class="muted">${esc(d.plate||"")} · ${esc(d.bike_type||"")}</div></div><div><span class="badge ${d.approved?"green":"red"}">${d.approved?"Aprobado":"Pendiente"}</span></div></div><div class="map-holder" style="margin-top:14px"><div id="modalMap" style="height:260px;border-radius:14px"></div></div>`);setTimeout(()=>{const m=L.map("modalMap").setView([d.last_lat||11.2408,d.last_lng||-74.204],14);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(m);L.marker([d.last_lat||11.2408,d.last_lng||-74.204]).addTo(m).bindPopup(d.full_name).openPopup()},40)}
 function openTariffForm(){openModal("Nueva tarifa",`<div class="form"><div class="row"><input id="tfNeighborhood" placeholder="Barrio"><select id="tfCat">${state.data.categories.map(c=>`<option>${esc(c.code)}</option>`).join("")}</select></div><input id="tfAmount" type="number" placeholder="Valor COP"><button class="btn primary" onclick="addTariff()">Guardar</button></div>`)}
