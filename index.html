@@ -102,8 +102,8 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
      coloque aquí service_role keys ni secretos de terceros.
    ========================================================= */
 const CONFIG = {
-  SUPABASE_URL: "https://njfweuwbceezwhadomze.supabase.co",
-  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qZndldXdiY2VleladoG9tbXplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0MDY3MzMsImV4cCI6MjEwMTk4MjczM30.oQZ-Cl15OVWvMk4Cv8M2y4QR6nG10JvRHLTVgYk9mno",
+  SUPABASE_URL: "https://wptknyzadqtadcfxhltf.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ3cHRrbnl6YWRxdGFkY2Z4aGx0ZiIsInJvbGUiOiJhbm9uIiwiaWF0IjoxNzg3NzY4OTU5LCJleHAiOjIxMDMzNDQ5NTl9.xQLqYc0lOZLz9HR2WMifxs1t1V95cEeshOFt-kTUxq4",
   APP_NAME: "MotoGo",
   ADMIN_USER: "admin",
   ADMIN_PIN: "12",
@@ -121,7 +121,7 @@ const CONFIG = {
 const SETUP_SQL = String.raw`-- ============================================================
 -- MOTOGO — INSTALACIÓN LIMPIA
 -- Supabase Auth + RLS + Storage + Realtime
--- Proyecto: https://njfweuwbceezwhadomze.supabase.co
+-- Proyecto: https://wptknyzadqtadcfxhltf.supabase.co
 --
 -- IMPORTANTE:
 -- 1) Este script BORRA las tablas de MotoGo y los objetos de los
@@ -1260,7 +1260,7 @@ const LS = {
 const state = {
   role:"driver", session:null, nav:"home", maps:{}, watchers:{}, faceReady:false,
   data:{drivers:[],clients:[],categories:[],tariffs:[],services:[],messages:[],locations:[],media:[]},
-  realtimeChannel:null, authUser:null
+  realtimeChannel:null, realtimeConnected:false, authUser:null
 };
 
 function $(id){return document.getElementById(id)}
@@ -1463,7 +1463,7 @@ async function afterLogin(){
 async function logout(){
   Object.values(state.watchers).forEach(w=>{try{navigator.geolocation.clearWatch(w)}catch{}})
   state.watchers={}; if(state.realtimeChannel&&supa){try{await supa.removeChannel(state.realtimeChannel)}catch{}} state.realtimeChannel=null;
-  if(supa)await supa.auth.signOut(); localStorage.removeItem(LS.session); state.session=null; state.authUser=null; state.authProfile=null;
+  if(supa)await supa.auth.signOut(); state.realtimeConnected=false; localStorage.removeItem(LS.session); state.session=null; state.authUser=null; state.authProfile=null;
   $("app").classList.add("hidden"); $("loginScreen").classList.remove("hidden"); $("loginInfo").textContent="Sesión cerrada.";
 }
 $("logoutBtn").onclick=logout;
@@ -1852,22 +1852,60 @@ function beep(){
 }
 function speak(text){try{const u=new SpeechSynthesisUtterance(text);u.lang="es-CO";u.rate=.95;u.pitch=1;u.volume=1;speechSynthesis.cancel();speechSynthesis.speak(u)}catch{}}
 function notifyStrong(title,body){beep();speak(body);if("Notification"in window&&Notification.permission==="granted")new Notification(title,{body});}
-function subscribeRealtime(){
- if(!supa||state.realtimeChannel)return;
+async function subscribeRealtime(){
+ if(!supa)return;
+ if(state.realtimeChannel){
+   try{await supa.removeChannel(state.realtimeChannel)}catch{}
+   state.realtimeChannel=null;
+ }
  try{
+  // Asegura que Realtime use el JWT actual de Supabase Auth.
+  try{await supa.realtime.setAuth()}catch{}
+
   const channel=supa.channel("motogo-live");
   const refresh=async(payload)=>{
-    await loadData();
-    if(state.role==="client"&&payload.table==="driver_locations") renderClient(); else render();
-    if(payload.eventType==="INSERT"||payload.eventType==="UPDATE") notifyStrong("MotoGo en tiempo real","Hay una actualización nueva");
+    try{
+      await loadData();
+      if(state.role==="client" && payload.table==="driver_locations") renderClient();
+      else render();
+      if(payload.eventType==="INSERT"||payload.eventType==="UPDATE"){
+        const title = payload.table==="messages" ? "Nuevo mensaje" : "MotoGo en tiempo real";
+        const body = payload.table==="driver_locations" ? "Se actualizó la ubicación del conductor." : "Hay una actualización nueva.";
+        notifyStrong(title,body);
+      }
+    }catch(e){console.warn("Error procesando Realtime",e)}
   };
-  channel.on("postgres_changes",{event:"*",schema:"public",table:"services"},p=>refresh(p));
-  channel.on("postgres_changes",{event:"*",schema:"public",table:"messages"},p=>{loadData().then(()=>{if($("chatBox"))refreshChat(state.currentChatId);if($("adminChatBox"))renderChat("admin");});});
-  channel.on("postgres_changes",{event:"*",schema:"public",table:"driver_locations"},p=>refresh({...p,table:"driver_locations"}));
-  channel.on("postgres_changes",{event:"*",schema:"public",table:"drivers"},p=>refresh(p));
-  channel.subscribe((status)=>console.log("MotoGo Realtime:",status));
+
+  channel
+    .on("postgres_changes",{event:"*",schema:"public",table:"services"},refresh)
+    .on("postgres_changes",{event:"*",schema:"public",table:"messages"},async p=>{
+      await loadData();
+      if($("chatBox")) refreshChat(state.currentChatId);
+      if($("adminChatBox")) renderChat("admin");
+      if(p.eventType==="INSERT") notifyStrong("Nuevo mensaje","Tienes un mensaje nuevo en MotoGo.");
+    })
+    .on("postgres_changes",{event:"*",schema:"public",table:"driver_locations"},p=>refresh({...p,table:"driver_locations"}))
+    .on("postgres_changes",{event:"*",schema:"public",table:"drivers"},refresh);
+
   state.realtimeChannel=channel;
- }catch(e){console.warn("Realtime no disponible",e)}
+  channel.subscribe(async(status)=>{
+    console.log("MotoGo Realtime:",status);
+    if(status==="SUBSCRIBED"){
+      state.realtimeConnected=true;
+      return;
+    }
+    state.realtimeConnected=false;
+    if(status==="CHANNEL_ERROR"||status==="TIMED_OUT"||status==="CLOSED"){
+      setTimeout(()=>{
+        if(supa && state.session) subscribeRealtime();
+      },1500);
+    }
+  });
+ }catch(e){
+  state.realtimeChannel=null;
+  state.realtimeConnected=false;
+  console.warn("Realtime no disponible",e);
+ }
 }
 async function boot(){
  ensureDemo();
