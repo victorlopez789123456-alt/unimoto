@@ -56,8 +56,8 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
         <button id="roleAdmin">Admin</button>
       </div>
       <div class="form">
-        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="Ej. usuario123"></div>
-        <div><label class="tiny muted">PIN</label><input id="loginPin" type="password" inputmode="numeric" maxlength="8" placeholder="Contraseña"></div>
+        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="Ej. admin-motogo" autocomplete="username"></div>
+        <div><label class="tiny muted">Contraseña</label><input id="loginPin" type="password" maxlength="64" autocomplete="current-password" placeholder="Contraseña"></div>
         <button class="btn primary block" id="loginBtn">Ingresar</button>
         <button class="btn ghost block hidden" id="registerClientBtn">Registro</button>
         <button class="btn ghost block hidden" id="recoverBtn">Recuperar</button>
@@ -1288,7 +1288,7 @@ function setRole(role){
   state.role=role;
   ['driver','client','admin'].forEach(r=>$('role'+r.charAt(0).toUpperCase()+r.slice(1)).classList.toggle('active',role===r));
   $('loginUser').placeholder='Usuario';
-  $('loginPin').type='password'; $('loginPin').placeholder='Contraseña';
+  $('loginPin').type='password'; $('loginPin').placeholder='Contraseña'; $('loginPin').maxLength=64;
   $('registerClientBtn').classList.add('hidden'); $('recoverBtn').classList.add('hidden');
   $('loginInfo').textContent='El administrador crea tu usuario y contraseña de MotoGo.';
 }
