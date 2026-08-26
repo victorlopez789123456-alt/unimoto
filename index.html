@@ -56,11 +56,11 @@ input,select,textarea{width:100%;background:#0f172a;color:#fff;border:1px solid 
         <button id="roleAdmin">Admin</button>
       </div>
       <div class="form">
-        <div><label class="tiny muted">Usuario / documento / correo</label><input id="loginUser" placeholder="Ej. 1000000000"></div>
-        <div><label class="tiny muted">PIN</label><input id="loginPin" type="password" inputmode="numeric" maxlength="8" placeholder="4 dígitos"></div>
+        <div><label class="tiny muted">Usuario</label><input id="loginUser" placeholder="Ej. usuario123"></div>
+        <div><label class="tiny muted">PIN</label><input id="loginPin" type="password" inputmode="numeric" maxlength="8" placeholder="Contraseña"></div>
         <button class="btn primary block" id="loginBtn">Ingresar</button>
-        <button class="btn ghost block" id="registerClientBtn">Soy nuevo cliente</button>
-        <button class="btn ghost block" id="recoverBtn">Recuperar PIN</button>
+        <button class="btn ghost block hidden" id="registerClientBtn">Registro</button>
+        <button class="btn ghost block hidden" id="recoverBtn">Recuperar</button>
       </div>
       <div id="loginInfo" class="tiny muted" style="margin-top:14px"></div>
     </section>
@@ -120,16 +120,12 @@ const CONFIG = {
    Se incluye dentro del HTML para mantener un único archivo.
    ========================================================= */
 const SETUP_SQL = String.raw`-- ============================================================
--- MOTOGO — INSTALACIÓN LIMPIA
--- Supabase Auth + RLS + Storage + Realtime
--- Proyecto: https://wptknyzadqtadcfxhltf.supabase.co
---
--- IMPORTANTE:
--- 1) Este script BORRA las tablas de MotoGo para una instalación limpia.
--- 2) NO borra objetos ni buckets de Storage desde SQL; Storage se gestiona por API/Dashboard.
--- 3) NO borra auth.users: las cuentas de Supabase Auth se conservan.
--- 4) Después de ejecutar este SQL, crea al menos un usuario admin en
---    Supabase Auth y ejecuta la función de bootstrap incluida abajo.
+-- MOTOGO — AUTHENTICACIÓN PROPIA DE LA APP
+-- Cliente / Conductor / Admin: usuario + contraseña gestionados
+-- por MotoGo en la base de datos.
+-- Supabase Auth se usa SOLO como identidad anónima técnica para que
+-- RLS, Storage y Realtime puedan seguir funcionando de forma segura.
+-- NO se usa Email Auth, OAuth, magic links ni proveedores externos.
 -- ============================================================
 
 begin;
@@ -137,10 +133,9 @@ begin;
 create extension if not exists pgcrypto;
 
 -- ------------------------------------------------------------
--- 0. LIMPIEZA DEL ESQUEMA ANTERIOR DE MOTOGO
+-- 0. LIMPIEZA DE OBJETOS DE MOTOGO
 -- ------------------------------------------------------------
 
-drop table if exists public.app_sessions cascade;
 drop table if exists public.audit_log cascade;
 drop table if exists public.notifications cascade;
 drop table if exists public.push_subscriptions cascade;
@@ -162,10 +157,19 @@ drop table if exists public.drivers cascade;
 drop table if exists public.app_roles cascade;
 drop table if exists public.profiles cascade;
 
+drop table if exists private.app_sessions cascade;
+drop table if exists private.app_credentials cascade;
+
 drop function if exists public.set_updated_at() cascade;
-drop function if exists public.resolve_login(text,text) cascade;
+drop function if exists public.motogo_login(text,text,text) cascade;
+drop function if exists public.motogo_me() cascade;
+drop function if exists public.motogo_logout() cascade;
+drop function if exists public.admin_create_user(text,text,text,text,text,text,text,text,text) cascade;
+drop function if exists public.admin_create_user(text,text,text,text,text,text,text,text,text,text) cascade;
+drop function if exists public.bootstrap_admin(text,text,text,text) cascade;
+drop function if exists public.bootstrap_admin(text,text) cascade;
 drop function if exists public.create_client(text,text,text,text) cascade;
-drop function if exists public.create_driver(text,text,text,text,text,text,text,text,text) cascade;
+drop function if exists public.create_driver(text,text,text,text,text,text,text,text,boolean) cascade;
 drop function if exists public.get_tariff(text,text) cascade;
 drop function if exists public.create_service(text,text,text,double precision,double precision,text,text,double precision,double precision,text,text,numeric) cascade;
 drop function if exists public.accept_service(uuid) cascade;
@@ -174,31 +178,61 @@ drop function if exists public.complete_service(uuid,text,text) cascade;
 drop function if exists public.cancel_service(uuid,text) cascade;
 drop function if exists public.set_driver_status(text) cascade;
 drop function if exists public.record_driver_location(uuid,double precision,double precision,double precision,double precision,double precision) cascade;
-drop function if exists public.bootstrap_admin(uuid,text) cascade;
+drop function if exists public.bootstrap_admin(text,text,text,text) cascade;
 drop function if exists public.handle_new_user() cascade;
 
--- No se eliminan objetos ni buckets de Storage desde SQL.
--- Supabase protege storage.objects contra DELETE directo.
--- Los objetos se gestionan mediante Storage API o Dashboard > Storage.
+-- IMPORTANTE: no se hace DELETE/DROP sobre storage.objects ni storage.buckets.
+-- Si existen archivos antiguos, elimínalos desde Dashboard > Storage o Storage API.
 
 -- ------------------------------------------------------------
--- 1. FUNCIONES AUXILIARES
+-- 1. ESQUEMA INTERNO Y FUNCIONES BASE
 -- ------------------------------------------------------------
 
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
 grant usage on schema private to postgres, service_role;
 
-create or replace function public.set_updated_at()
-returns trigger
-language plpgsql
-set search_path = public
-as $$
-begin
-  new.updated_at := now();
-  return new;
-end;
-$$;
+create table public.profiles (
+  id uuid primary key default gen_random_uuid(),
+  role text not null check (role in ('admin','driver','client')),
+  full_name text not null,
+  phone text,
+  email text,
+  national_id text,
+  avatar_url text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.app_roles (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  role text not null check (role in ('admin','driver','client')),
+  created_at timestamptz not null default now()
+);
+
+create table private.app_credentials (
+  profile_id uuid primary key references public.profiles(id) on delete cascade,
+  username text unique not null,
+  password_hash text not null,
+  active boolean not null default true,
+  failed_attempts integer not null default 0,
+  locked_until timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table private.app_sessions (
+  auth_user_id uuid primary key,
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null default now() + interval '12 hours'
+);
+
+revoke all on table private.app_credentials from public, anon, authenticated;
+revoke all on table private.app_sessions from public, anon, authenticated;
+grant select,insert,update,delete on private.app_credentials to service_role;
+grant select,insert,update,delete on private.app_sessions to service_role;
 
 create or replace function private.current_profile_id()
 returns uuid
@@ -207,9 +241,10 @@ stable
 security definer
 set search_path = ''
 as $$
-  select p.id
-  from public.profiles p
-  where p.auth_user_id = (select auth.uid())
+  select s.profile_id
+  from private.app_sessions s
+  where s.auth_user_id = (select auth.uid())
+    and s.expires_at > now()
   limit 1;
 $$;
 
@@ -222,7 +257,8 @@ set search_path = ''
 as $$
   select p.role
   from public.profiles p
-  where p.auth_user_id = (select auth.uid())
+  where p.id = (select private.current_profile_id())
+    and p.active = true
   limit 1;
 $$;
 
@@ -233,12 +269,7 @@ stable
 security definer
 set search_path = ''
 as $$
-  select exists (
-    select 1 from public.profiles p
-    where p.auth_user_id = (select auth.uid())
-      and p.role = 'admin'
-      and p.active = true
-  );
+  select coalesce((select private.current_role()) = 'admin', false);
 $$;
 
 create or replace function private.driver_id()
@@ -250,8 +281,7 @@ set search_path = ''
 as $$
   select d.id
   from public.drivers d
-  join public.profiles p on p.id=d.profile_id
-  where p.auth_user_id=(select auth.uid())
+  where d.profile_id = (select private.current_profile_id())
   limit 1;
 $$;
 
@@ -264,90 +294,23 @@ set search_path = ''
 as $$
   select c.id
   from public.clients c
-  join public.profiles p on p.id=c.profile_id
-  where p.auth_user_id=(select auth.uid())
+  where c.profile_id = (select private.current_profile_id())
   limit 1;
 $$;
 
--- ------------------------------------------------------------
--- 2. AUTH / PERFILES
--- ------------------------------------------------------------
-
-create table public.profiles (
-  id uuid primary key default gen_random_uuid(),
-  auth_user_id uuid unique not null references auth.users(id) on delete cascade,
-  role text not null check (role in ('admin','driver','client')),
-  full_name text not null,
-  phone text,
-  email text,
-  national_id text,
-  avatar_url text,
-  active boolean not null default true,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create index idx_profiles_auth_user on public.profiles(auth_user_id);
-create index idx_profiles_role on public.profiles(role);
-create index idx_profiles_national_id on public.profiles(national_id);
-
-create table public.app_roles (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  role text not null check (role in ('admin','driver','client')),
-  created_at timestamptz not null default now()
-);
-
-alter table public.profiles enable row level security;
-alter table public.app_roles enable row level security;
-
-create or replace function public.handle_new_user()
+create or replace function public.set_updated_at()
 returns trigger
 language plpgsql
-security definer
 set search_path = public
 as $$
-declare
-  v_role text := coalesce(new.raw_user_meta_data->>'role','client');
-  v_name text := coalesce(new.raw_user_meta_data->>'full_name', split_part(coalesce(new.email,''),'@',1), 'Usuario');
-  v_nid text := nullif(new.raw_user_meta_data->>'national_id','');
 begin
-  if v_role not in ('admin','driver','client') then
-    v_role := 'client';
-  end if;
-  insert into public.profiles(auth_user_id,role,full_name,email,national_id)
-  values(new.id,v_role,v_name,new.email,v_nid)
-  on conflict (auth_user_id) do update set
-    role=excluded.role,
-    full_name=excluded.full_name,
-    email=excluded.email,
-    national_id=coalesce(excluded.national_id,public.profiles.national_id),
-    updated_at=now();
-  insert into public.app_roles(user_id,role)
-  values(new.id,v_role)
-  on conflict (user_id) do update set role=excluded.role;
+  new.updated_at := now();
   return new;
 end;
 $$;
 
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
-
-create policy profiles_self_select on public.profiles
-  for select to authenticated
-  using (auth_user_id=(select auth.uid()) or (select private.is_admin()));
-
-create policy profiles_self_update on public.profiles
-  for update to authenticated
-  using (auth_user_id=(select auth.uid()) or (select private.is_admin()))
-  with check (auth_user_id=(select auth.uid()) or (select private.is_admin()));
-
-create policy app_roles_self_select on public.app_roles
-  for select to authenticated
-  using (user_id=(select auth.uid()) or (select private.is_admin()));
-
 -- ------------------------------------------------------------
--- 3. CONDUCTORES / CLIENTES
+-- 2. CONDUCTORES / CLIENTES
 -- ------------------------------------------------------------
 
 create table public.drivers (
@@ -393,45 +356,255 @@ create table public.clients (
   updated_at timestamptz not null default now()
 );
 
+create index idx_profiles_role on public.profiles(role);
+create index idx_profiles_national_id on public.profiles(national_id);
 create index idx_drivers_status on public.drivers(status);
 create index idx_drivers_profile on public.drivers(profile_id);
 create index idx_clients_profile on public.clients(profile_id);
+create index idx_clients_login on public.clients(login);
 
-alter table public.drivers enable row level security;
-alter table public.clients enable row level security;
+create or replace function public.motogo_login(p_role text,p_username text,p_password text)
+returns table(profile_id uuid,role text,full_name text,phone text,email text)
+language plpgsql
+security definer
+set search_path = public, private, extensions
+as $$
+declare
+  v_cred private.app_credentials;
+  v_profile public.profiles;
+  v_auth uuid := auth.uid();
+begin
+  if v_auth is null then raise exception 'anonymous_auth_required'; end if;
+  if p_role not in ('admin','driver','client') then raise exception 'invalid_role'; end if;
+  select * into v_cred from private.app_credentials where lower(username)=lower(trim(p_username)) and active=true limit 1;
+  if not found then raise exception 'invalid_credentials'; end if;
+  if v_cred.locked_until is not null and v_cred.locked_until > now() then raise exception 'account_locked'; end if;
+  if crypt(p_password,v_cred.password_hash) <> v_cred.password_hash then
+    update private.app_credentials set failed_attempts=failed_attempts+1,locked_until=case when failed_attempts+1 >= 5 then now()+interval '15 minutes' else locked_until end,updated_at=now() where profile_id=v_cred.profile_id;
+    raise exception 'invalid_credentials';
+  end if;
+  select * into v_profile from public.profiles where id=v_cred.profile_id and active=true and role=p_role limit 1;
+  if not found then raise exception 'invalid_role'; end if;
+  if p_role='driver' and not exists(
+    select 1 from public.drivers d
+    where d.profile_id=v_profile.id and d.approved=true and d.status <> 'blocked'
+  ) then
+    raise exception 'driver_not_approved';
+  end if;
+  update private.app_credentials set failed_attempts=0,locked_until=null,updated_at=now() where profile_id=v_cred.profile_id;
+  insert into private.app_sessions(auth_user_id,profile_id,expires_at)
+  values(v_auth,v_profile.id,now()+interval '12 hours')
+  on conflict(auth_user_id) do update set profile_id=excluded.profile_id,expires_at=excluded.expires_at,created_at=now();
+  return query select v_profile.id,v_profile.role,v_profile.full_name,v_profile.phone,v_profile.email;
+end;
+$$;
 
-create policy drivers_select on public.drivers
-  for select to authenticated
-  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()) or status='available');
+grant execute on function public.motogo_login(text,text,text) to anon,authenticated;
 
-create policy drivers_update on public.drivers
-  for update to authenticated
-  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()))
-  with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create or replace function public.motogo_me()
+returns table(profile_id uuid,role text,full_name text,phone text,email text,national_id text)
+language sql
+stable
+security definer
+set search_path = public, private
+as $$
+  select p.id,p.role,p.full_name,p.phone,p.email,p.national_id
+  from public.profiles p
+  where p.id=(select private.current_profile_id()) and p.active=true;
+$$;
+grant execute on function public.motogo_me() to authenticated;
 
-create policy drivers_admin_insert on public.drivers
-  for insert to authenticated
-  with check ((select private.is_admin()));
+create or replace function public.motogo_logout()
+returns void
+language sql
+security definer
+set search_path = private
+as $$
+  delete from private.app_sessions where auth_user_id=(select auth.uid());
+$$;
+grant execute on function public.motogo_logout() to authenticated,anon;
 
-create policy drivers_admin_delete on public.drivers
-  for delete to authenticated
-  using ((select private.is_admin()));
+create or replace function public.admin_create_user(
+  p_role text,
+  p_full_name text,
+  p_phone text,
+  p_national_id text,
+  p_plate text default null,
+  p_bike_model text default null,
+  p_bike_type text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, private, extensions
+as $$
+declare
+  v_profile uuid;
+  v_hash text;
+  v_username text;
+  v_password text;
+  v_base text;
+  v_i int := 0;
+  v_email text;
+begin
+  if not (select private.is_admin()) then raise exception 'admin_required'; end if;
+  if p_role not in ('driver','client') then raise exception 'invalid_role'; end if;
+  if length(trim(coalesce(p_full_name,''))) < 2 then raise exception 'invalid_name'; end if;
+  if length(trim(coalesce(p_national_id,''))) < 4 then raise exception 'invalid_national_id'; end if;
 
-create policy clients_select on public.clients
-  for select to authenticated
-  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+  v_base := regexp_replace(lower(trim(split_part(p_full_name,' ',1))), '[^a-z0-9]+', '', 'g');
+  if v_base is null or v_base='' then v_base := case when p_role='driver' then 'conductor' else 'cliente' end; end if;
 
-create policy clients_update on public.clients
-  for update to authenticated
-  using (profile_id=(select private.current_profile_id()) or (select private.is_admin()))
-  with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+  loop
+    v_i := v_i + 1;
+    v_username := case when p_role='driver' then 'mot-' else 'cli-' end || v_base || '-' || substr(replace(p_national_id,' ',''),greatest(length(replace(p_national_id,' ',''))-3,1),4);
+    if v_i > 1 then v_username := v_username || '-' || v_i::text; end if;
+    exit when not exists(select 1 from private.app_credentials where lower(username)=lower(v_username));
+    if v_i > 50 then raise exception 'username_generation_failed'; end if;
+  end loop;
 
-create policy clients_admin_insert on public.clients
-  for insert to authenticated
-  with check ((select private.is_admin()));
+  v_password := upper(substr(encode(gen_random_bytes(12),'hex'),1,6)) || '-' || upper(substr(encode(gen_random_bytes(12),'hex'),1,6));
+
+  insert into public.profiles(role,full_name,phone,national_id)
+  values(p_role,trim(p_full_name),nullif(trim(p_phone),''),trim(p_national_id))
+  returning id into v_profile;
+
+  insert into public.app_roles(profile_id,role) values(v_profile,p_role);
+  v_hash := crypt(v_password,gen_salt('bf',8));
+  insert into private.app_credentials(profile_id,username,password_hash)
+  values(v_profile,v_username,v_hash);
+
+  if p_role='driver' then
+    insert into public.drivers(profile_id,username,full_name,phone,national_id,plate,bike_model,bike_type,approved,status)
+    values(v_profile,v_username,trim(p_full_name),nullif(trim(p_phone),''),trim(p_national_id),nullif(trim(p_plate),''),nullif(trim(p_bike_model),''),nullif(trim(p_bike_type),''),false,'offline');
+  else
+    insert into public.clients(profile_id,login,full_name,phone,national_id)
+    values(v_profile,v_username,trim(p_full_name),nullif(trim(p_phone),''),trim(p_national_id));
+  end if;
+
+  return jsonb_build_object(
+    'profile_id',v_profile,
+    'role',p_role,
+    'username',v_username,
+    'password',v_password,
+    'full_name',trim(p_full_name),
+    'message','Credenciales generadas. La contraseña se muestra una sola vez.'
+  );
+exception when unique_violation then
+  raise exception 'duplicate_data';
+end;
+$$;
+grant execute on function public.admin_create_user(text,text,text,text,text,text,text) to authenticated;
 
 -- ------------------------------------------------------------
--- 4. CATEGORÍAS / TARIFAS
+-- 2B. ADMINISTRACIÓN DE ACCESOS
+-- ------------------------------------------------------------
+
+create or replace function public.admin_reset_password(p_profile_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, private, extensions
+as $$
+declare
+  v_profile public.profiles;
+  v_cred private.app_credentials;
+  v_password text;
+begin
+  if not (select private.is_admin()) then raise exception 'admin_required'; end if;
+
+  select * into v_profile
+  from public.profiles
+  where id=p_profile_id and role in ('driver','client')
+  limit 1;
+  if not found then raise exception 'user_not_found'; end if;
+
+  select * into v_cred
+  from private.app_credentials
+  where profile_id=p_profile_id
+  limit 1;
+  if not found then raise exception 'credentials_not_found'; end if;
+
+  v_password := upper(substr(encode(gen_random_bytes(12),'hex'),1,6)) || '-' || upper(substr(encode(gen_random_bytes(12),'hex'),1,6));
+
+  delete from private.app_sessions where profile_id=p_profile_id;
+
+  update private.app_credentials
+  set password_hash=crypt(v_password,gen_salt('bf',8)),
+      active=true,
+      failed_attempts=0,
+      locked_until=null,
+      updated_at=now()
+  where profile_id=p_profile_id;
+
+  return jsonb_build_object(
+    'profile_id',p_profile_id,
+    'role',v_profile.role,
+    'username',v_cred.username,
+    'password',v_password,
+    'full_name',v_profile.full_name,
+    'message','Contraseña restablecida. Se muestra una sola vez.'
+  );
+end;
+$$;
+
+revoke all on function public.admin_reset_password(uuid) from public, anon;
+grant execute on function public.admin_reset_password(uuid) to authenticated;
+
+create or replace function public.admin_set_driver_access(p_driver_id uuid,p_action text)
+returns public.drivers
+language plpgsql
+security definer
+set search_path = public, private
+as $$
+declare
+  v_driver public.drivers;
+  v_profile_id uuid;
+begin
+  if not (select private.is_admin()) then raise exception 'admin_required'; end if;
+
+  select * into v_driver from public.drivers where id=p_driver_id for update;
+  if not found then raise exception 'driver_not_found'; end if;
+
+  v_profile_id := v_driver.profile_id;
+
+  if p_action = 'approve' then
+    update public.drivers
+      set approved=true,status=case when status='blocked' then 'offline' else status end,updated_at=now()
+      where id=p_driver_id
+      returning * into v_driver;
+    update public.profiles set active=true,updated_at=now() where id=v_profile_id;
+    update private.app_credentials set active=true,failed_attempts=0,locked_until=null,updated_at=now() where profile_id=v_profile_id;
+
+  elsif p_action = 'block' then
+    update public.drivers
+      set approved=false,status='blocked',updated_at=now()
+      where id=p_driver_id
+      returning * into v_driver;
+    delete from private.app_sessions where profile_id=v_profile_id;
+    update private.app_credentials set active=false,updated_at=now() where profile_id=v_profile_id;
+
+  elsif p_action = 'unblock' then
+    update public.drivers
+      set approved=true,status='offline',updated_at=now()
+      where id=p_driver_id
+      returning * into v_driver;
+    update public.profiles set active=true,updated_at=now() where id=v_profile_id;
+    update private.app_credentials set active=true,failed_attempts=0,locked_until=null,updated_at=now() where profile_id=v_profile_id;
+
+  else
+    raise exception 'invalid_driver_action';
+  end if;
+
+  return v_driver;
+end;
+$$;
+
+revoke all on function public.admin_set_driver_access(uuid,text) from public, anon;
+grant execute on function public.admin_set_driver_access(uuid,text) to authenticated;
+
+-- ------------------------------------------------------------
+-- 3. CATEGORÍAS / TARIFAS
 -- ------------------------------------------------------------
 
 create table public.categories (
@@ -456,23 +629,8 @@ create table public.tariffs (
   updated_at timestamptz not null default now()
 );
 
-alter table public.categories enable row level security;
-alter table public.tariffs enable row level security;
-
-create policy categories_read on public.categories
-  for select to authenticated using (active=true or (select private.is_admin()));
-create policy categories_admin_write on public.categories
-  for all to authenticated
-  using ((select private.is_admin())) with check ((select private.is_admin()));
-
-create policy tariffs_read on public.tariffs
-  for select to authenticated using (active=true or (select private.is_admin()));
-create policy tariffs_admin_write on public.tariffs
-  for all to authenticated
-  using ((select private.is_admin())) with check ((select private.is_admin()));
-
 -- ------------------------------------------------------------
--- 5. SERVICIOS
+-- 4. SERVICIOS
 -- ------------------------------------------------------------
 
 create table public.services (
@@ -510,44 +668,10 @@ create table public.services (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-
 create index idx_services_status on public.services(status);
 create index idx_services_driver on public.services(driver_id);
 create index idx_services_client on public.services(client_id);
 create index idx_services_created on public.services(created_at desc);
-
-alter table public.services enable row level security;
-
-create policy services_select on public.services
-  for select to authenticated
-  using (
-    client_id=(select private.client_id())
-    or driver_id=(select private.driver_id())
-    or (select private.is_admin())
-  );
-
-create policy services_client_insert on public.services
-  for insert to authenticated
-  with check (client_id=(select private.client_id()) or (select private.is_admin()));
-
-create policy services_driver_update on public.services
-  for update to authenticated
-  using (
-    (select private.is_admin())
-    or driver_id=(select private.driver_id())
-  )
-  with check (
-    (select private.is_admin())
-    or driver_id=(select private.driver_id())
-  );
-
-create policy services_admin_delete on public.services
-  for delete to authenticated
-  using ((select private.is_admin()));
-
--- ------------------------------------------------------------
--- 6. ASIGNACIONES / MENSAJES / PAGOS / GPS
--- ------------------------------------------------------------
 
 create table public.service_assignments (
   id uuid primary key default gen_random_uuid(),
@@ -575,7 +699,7 @@ create table public.payments (
   driver_id uuid references public.drivers(id),
   client_id uuid references public.clients(id),
   amount numeric(12,2) not null default 0,
-  method text not null,
+  method text not null default 'other',
   status text not null default 'confirmed',
   confirmed_at timestamptz default now()
 );
@@ -590,83 +714,8 @@ create table public.driver_locations (
   captured_at timestamptz not null default now()
 );
 
-alter table public.service_assignments enable row level security;
-alter table public.messages enable row level security;
-alter table public.payments enable row level security;
-alter table public.driver_locations enable row level security;
-
-create policy assignments_select on public.service_assignments
-  for select to authenticated
-  using (
-    driver_id=(select private.driver_id())
-    or (select private.is_admin())
-    or exists(select 1 from public.services s where s.id=service_id and s.client_id=(select private.client_id()))
-  );
-
-create policy assignments_admin_insert on public.service_assignments
-  for insert to authenticated with check ((select private.is_admin()));
-
-create policy assignments_driver_update on public.service_assignments
-  for update to authenticated
-  using (driver_id=(select private.driver_id()) or (select private.is_admin()))
-  with check (driver_id=(select private.driver_id()) or (select private.is_admin()));
-
-create policy messages_select on public.messages
-  for select to authenticated
-  using (
-    (select private.is_admin())
-    or sender_id=(select private.driver_id())
-    or sender_id=(select private.client_id())
-    or exists (
-      select 1 from public.services s
-      where s.id=messages.service_id
-        and (s.client_id=(select private.client_id()) or s.driver_id=(select private.driver_id()))
-    )
-  );
-
-create policy messages_insert on public.messages
-  for insert to authenticated
-  with check (
-    (select private.is_admin())
-    or sender_id=(select private.current_profile_id())
-    or sender_id=(select private.driver_id())
-    or sender_id=(select private.client_id())
-  );
-
-create policy messages_update on public.messages
-  for update to authenticated
-  using ((select private.is_admin()) or sender_id=(select private.current_profile_id()))
-  with check ((select private.is_admin()) or sender_id=(select private.current_profile_id()));
-
-create policy payments_select on public.payments
-  for select to authenticated
-  using (
-    (select private.is_admin())
-    or driver_id=(select private.driver_id())
-    or client_id=(select private.client_id())
-  );
-
-create policy payments_admin_insert on public.payments
-  for insert to authenticated
-  with check ((select private.is_admin()) or driver_id=(select private.driver_id()));
-
-create policy locations_insert on public.driver_locations
-  for insert to authenticated
-  with check (driver_id=(select private.driver_id()));
-
-create policy locations_select on public.driver_locations
-  for select to authenticated
-  using (
-    driver_id=(select private.driver_id())
-    or (select private.is_admin())
-    or exists(
-      select 1 from public.services s
-      where s.id=driver_locations.service_id and s.client_id=(select private.client_id())
-    )
-  );
-
 -- ------------------------------------------------------------
--- 7. DOCUMENTOS / MEDIA
+-- 5. DOCUMENTOS / MEDIA
 -- ------------------------------------------------------------
 
 create table public.driver_documents (
@@ -694,278 +743,145 @@ create table public.media_assets (
   updated_at timestamptz not null default now()
 );
 
+-- ------------------------------------------------------------
+-- 6. PUSH / NOTIFICACIONES / AUDITORÍA
+-- ------------------------------------------------------------
+
+create table public.push_subscriptions (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  endpoint text not null unique,
+  p256dh text not null,
+  auth text not null,
+  user_agent text,
+  active boolean not null default true,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now()
+);
+
+create table public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references public.profiles(id) on delete cascade,
+  channel text not null default 'in_app',
+  event_type text not null,
+  service_id uuid references public.services(id) on delete set null,
+  title text not null,
+  body text not null,
+  status text not null default 'queued',
+  provider_response jsonb,
+  sent_at timestamptz,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create table public.audit_log (
+  id bigint generated always as identity primary key,
+  actor_profile_id uuid references public.profiles(id) on delete set null,
+  action text not null,
+  table_name text,
+  row_id uuid,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+-- ------------------------------------------------------------
+-- 7. RLS
+-- ------------------------------------------------------------
+
+alter table public.profiles enable row level security;
+alter table public.app_roles enable row level security;
+alter table public.drivers enable row level security;
+alter table public.clients enable row level security;
+alter table public.categories enable row level security;
+alter table public.tariffs enable row level security;
+alter table public.services enable row level security;
+alter table public.service_assignments enable row level security;
+alter table public.messages enable row level security;
+alter table public.payments enable row level security;
+alter table public.driver_locations enable row level security;
 alter table public.driver_documents enable row level security;
 alter table public.media_assets enable row level security;
+alter table public.push_subscriptions enable row level security;
+alter table public.notifications enable row level security;
+alter table public.audit_log enable row level security;
 
-create policy driver_documents_select on public.driver_documents
-  for select to authenticated
-  using (driver_id=(select private.driver_id()) or (select private.is_admin()));
+create policy profiles_select on public.profiles for select to authenticated using (id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy profiles_update on public.profiles for update to authenticated using (id=(select private.current_profile_id()) or (select private.is_admin())) with check (id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy app_roles_select on public.app_roles for select to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
 
-create policy driver_documents_write on public.driver_documents
-  for all to authenticated
-  using (driver_id=(select private.driver_id()) or (select private.is_admin()))
-  with check (driver_id=(select private.driver_id()) or (select private.is_admin()));
+create policy drivers_select on public.drivers for select to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin()) or status='available');
+create policy drivers_update on public.drivers for update to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin())) with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy drivers_admin_delete on public.drivers for delete to authenticated using ((select private.is_admin()));
 
-create policy media_read on public.media_assets
-  for select to authenticated
-  using (active=true or (select private.is_admin()));
+create policy clients_select on public.clients for select to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy clients_update on public.clients for update to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin())) with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy clients_admin_delete on public.clients for delete to authenticated using ((select private.is_admin()));
 
-create policy media_admin_write on public.media_assets
-  for all to authenticated
-  using ((select private.is_admin()))
-  with check ((select private.is_admin()));
+create policy categories_read on public.categories for select to authenticated using (active=true or (select private.is_admin()));
+create policy categories_admin_write on public.categories for all to authenticated using ((select private.is_admin())) with check ((select private.is_admin()));
+create policy tariffs_read on public.tariffs for select to authenticated using (active=true or (select private.is_admin()));
+create policy tariffs_admin_write on public.tariffs for all to authenticated using ((select private.is_admin())) with check ((select private.is_admin()));
 
--- ------------------------------------------------------------
--- 8. STORAGE
--- ------------------------------------------------------------
+create policy services_select on public.services for select to authenticated using (client_id=(select private.client_id()) or driver_id=(select private.driver_id()) or (select private.is_admin()));
+create policy services_client_insert on public.services for insert to authenticated with check (client_id=(select private.client_id()) or (select private.is_admin()));
+create policy services_driver_update on public.services for update to authenticated using ((select private.is_admin()) or driver_id=(select private.driver_id())) with check ((select private.is_admin()) or driver_id=(select private.driver_id()));
+create policy services_admin_delete on public.services for delete to authenticated using ((select private.is_admin()));
 
-insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
-  ('driver-documents','driver-documents',false,15728640,array['image/jpeg','image/png','application/pdf']),
-  ('delivery-proofs','delivery-proofs',false,15728640,array['image/jpeg','image/png','image/webp']),
-  ('profiles','profiles',true,5242880,array['image/jpeg','image/png','image/webp']),
-  ('media','media',true,104857600,array['image/jpeg','image/png','image/webp','video/mp4','video/webm'])
-;
+create policy assignments_select on public.service_assignments for select to authenticated using (driver_id=(select private.driver_id()) or (select private.is_admin()) or exists(select 1 from public.services s where s.id=service_assignments.service_id and s.client_id=(select private.client_id())));
+create policy assignments_admin_insert on public.service_assignments for insert to authenticated with check ((select private.is_admin()));
+create policy assignments_driver_update on public.service_assignments for update to authenticated using (driver_id=(select private.driver_id()) or (select private.is_admin())) with check (driver_id=(select private.driver_id()) or (select private.is_admin()));
 
-create policy driver_docs_upload on storage.objects
-  for insert to authenticated
-  with check (
-    bucket_id='driver-documents'
-    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
-  );
+create policy messages_select on public.messages for select to authenticated using ((select private.is_admin()) or sender_id=(select private.driver_id()) or sender_id=(select private.client_id()) or exists(select 1 from public.services s where s.id=messages.service_id and (s.client_id=(select private.client_id()) or s.driver_id=(select private.driver_id()))));
+create policy messages_insert on public.messages for insert to authenticated with check ((select private.is_admin()) or sender_id=(select private.driver_id()) or sender_id=(select private.client_id()) or sender_id=(select private.current_profile_id()));
+create policy messages_update on public.messages for update to authenticated using ((select private.is_admin()) or sender_id=(select private.current_profile_id())) with check ((select private.is_admin()) or sender_id=(select private.current_profile_id()));
 
-create policy driver_docs_read on storage.objects
-  for select to authenticated
-  using (
-    bucket_id='driver-documents'
-    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
-  );
+create policy payments_select on public.payments for select to authenticated using ((select private.is_admin()) or driver_id=(select private.driver_id()) or client_id=(select private.client_id()));
+create policy payments_insert on public.payments for insert to authenticated with check ((select private.is_admin()) or driver_id=(select private.driver_id()));
 
-create policy driver_docs_update on storage.objects
-  for update to authenticated
-  using (
-    bucket_id='driver-documents'
-    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
-  )
-  with check (
-    bucket_id='driver-documents'
-    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
-  );
+create policy locations_insert on public.driver_locations for insert to authenticated with check (driver_id=(select private.driver_id()));
+create policy locations_select on public.driver_locations for select to authenticated using (driver_id=(select private.driver_id()) or (select private.is_admin()) or exists(select 1 from public.services s where s.id=driver_locations.service_id and s.client_id=(select private.client_id())));
 
-create policy driver_docs_delete on storage.objects
-  for delete to authenticated
-  using (
-    bucket_id='driver-documents'
-    and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)
-  );
+create policy driver_docs_select on public.driver_documents for select to authenticated using (driver_id=(select private.driver_id()) or (select private.is_admin()));
+create policy driver_docs_write on public.driver_documents for all to authenticated using (driver_id=(select private.driver_id()) or (select private.is_admin())) with check (driver_id=(select private.driver_id()) or (select private.is_admin()));
 
-create policy delivery_proofs_upload on storage.objects
-  for insert to authenticated
-  with check (
-    bucket_id='delivery-proofs'
-    and (
-      (select private.is_admin())
-      or exists(
-        select 1 from public.services s
-        where s.id::text=(storage.foldername(name))[1]
-          and s.driver_id=(select private.driver_id())
-      )
-    )
-  );
+create policy media_read on public.media_assets for select to authenticated using (active=true or (select private.is_admin()));
+create policy media_admin_write on public.media_assets for all to authenticated using ((select private.is_admin())) with check ((select private.is_admin()));
 
-create policy delivery_proofs_read on storage.objects
-  for select to authenticated
-  using (
-    bucket_id='delivery-proofs'
-    and (
-      (select private.is_admin())
-      or exists(
-        select 1 from public.services s
-        where s.id::text=(storage.foldername(name))[1]
-          and (s.client_id=(select private.client_id()) or s.driver_id=(select private.driver_id()))
-      )
-    )
-  );
+create policy push_select on public.push_subscriptions for select to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy push_insert on public.push_subscriptions for insert to authenticated with check (profile_id=(select private.current_profile_id()));
+create policy push_update on public.push_subscriptions for update to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin())) with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy push_delete on public.push_subscriptions for delete to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
 
-create policy delivery_proofs_delete on storage.objects
-  for delete to authenticated
-  using (
-    bucket_id='delivery-proofs'
-    and ((select private.is_admin()) or exists(
-      select 1 from public.services s
-      where s.id::text=(storage.foldername(name))[1] and s.driver_id=(select private.driver_id())
-    ))
-  );
-
-create policy profiles_public_read on storage.objects
-  for select to anon,authenticated
-  using (bucket_id='profiles');
-
-create policy profiles_self_write on storage.objects
-  for insert to authenticated
-  with check (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
-
-create policy profiles_self_update on storage.objects
-  for update to authenticated
-  using (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text)
-  with check (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
-
-create policy profiles_self_delete on storage.objects
-  for delete to authenticated
-  using (bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
-
-create policy media_public_read on storage.objects
-  for select to anon,authenticated
-  using (bucket_id='media');
-
-create policy media_admin_write on storage.objects
-  for all to authenticated
-  using (bucket_id='media' and (select private.is_admin()))
-  with check (bucket_id='media' and (select private.is_admin()));
+create policy notifications_select on public.notifications for select to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy notifications_update on public.notifications for update to authenticated using (profile_id=(select private.current_profile_id()) or (select private.is_admin())) with check (profile_id=(select private.current_profile_id()) or (select private.is_admin()));
+create policy audit_admin_read on public.audit_log for select to authenticated using ((select private.is_admin()));
 
 -- ------------------------------------------------------------
--- 9. RPC DE AUTENTICACIÓN / CLIENTE / CONDUCTOR / SERVICIO
+-- 8. RPC DE SERVICIOS
 -- ------------------------------------------------------------
-
-create or replace function public.resolve_login(p_role text,p_login text)
-returns table(auth_email text, role text, profile_id uuid, full_name text)
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select p.email,p.role,p.id,p.full_name
-  from public.profiles p
-  left join public.drivers d on d.profile_id=p.id
-  left join public.clients c on c.profile_id=p.id
-  where p.active=true
-    and (
-      (p_role='admin' and p.role='admin' and (p_login='admin' or lower(coalesce(p.email,''))=lower(p_login)))
-      or
-      (p_role='driver' and p.role='driver' and (
-        lower(coalesce(d.username,''))=lower(p_login) or
-        d.national_id=p_login or d.phone=p_login or lower(coalesce(p.email,''))=lower(p_login)
-      ))
-      or
-      (p_role='client' and p.role='client' and (
-        c.login=p_login or c.national_id=p_login or c.phone=p_login or lower(coalesce(c.email,''))=lower(p_login) or lower(coalesce(p.email,''))=lower(p_login)
-      ))
-    )
-  limit 1;
-$$;
-
-grant execute on function public.resolve_login(text,text) to anon,authenticated;
-
-create or replace function public.create_client(
-  p_login text,
-  p_full_name text,
-  p_phone text,
-  p_national_id text
-)
-returns uuid
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_uid uuid := (select auth.uid());
-  v_profile uuid;
-  v_id uuid;
-begin
-  if v_uid is null then raise exception 'auth_required'; end if;
-  select id into v_profile from public.profiles where auth_user_id=v_uid limit 1;
-  if v_profile is null then raise exception 'profile_not_found'; end if;
-  update public.profiles
-    set role='client',full_name=p_full_name,phone=p_phone,national_id=p_national_id,updated_at=now()
-    where id=v_profile;
-  update public.app_roles set role='client' where user_id=v_uid;
-  insert into public.clients(profile_id,login,full_name,phone,email,national_id)
-  values(v_profile,p_login,p_full_name,p_phone,(select email from auth.users where id=v_uid),p_national_id)
-  on conflict (profile_id) do update set
-    login=excluded.login,full_name=excluded.full_name,phone=excluded.phone,email=excluded.email,national_id=excluded.national_id,updated_at=now()
-  returning id into v_id;
-  return v_id;
-end;
-$$;
-
-grant execute on function public.create_client(text,text,text,text) to authenticated;
-
-create or replace function public.create_driver(
-  p_auth_email text,
-  p_username text,
-  p_full_name text,
-  p_phone text,
-  p_national_id text,
-  p_plate text,
-  p_bike_model text,
-  p_bike_type text,
-  p_approved boolean default false
-)
-returns uuid
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  v_auth uuid;
-  v_profile uuid;
-  v_driver uuid;
-begin
-  if not (select private.is_admin()) then raise exception 'admin_required'; end if;
-  select id into v_auth from auth.users where lower(email)=lower(p_auth_email) limit 1;
-  if v_auth is null then raise exception 'auth_user_not_found'; end if;
-  insert into public.profiles(auth_user_id,role,full_name,phone,email,national_id)
-  values(v_auth,'driver',p_full_name,p_phone,p_auth_email,p_national_id)
-  on conflict (auth_user_id) do update set role='driver',full_name=excluded.full_name,phone=excluded.phone,email=excluded.email,national_id=excluded.national_id,updated_at=now()
-  returning id into v_profile;
-  insert into public.app_roles(user_id,role) values(v_auth,'driver') on conflict (user_id) do update set role='driver';
-  insert into public.drivers(profile_id,username,full_name,phone,national_id,plate,bike_model,bike_type,approved)
-  values(v_profile,p_username,p_full_name,p_phone,p_national_id,p_plate,p_bike_model,p_bike_type,p_approved)
-  on conflict (profile_id) do update set username=excluded.username,full_name=excluded.full_name,phone=excluded.phone,national_id=excluded.national_id,plate=excluded.plate,bike_model=excluded.bike_model,bike_type=excluded.bike_type,approved=excluded.approved,updated_at=now()
-  returning id into v_driver;
-  return v_driver;
-end;
-$$;
-
-grant execute on function public.create_driver(text,text,text,text,text,text,text,text,boolean) to authenticated;
 
 create or replace function public.get_tariff(p_neighborhood text,p_category text)
-returns table(id uuid, amount numeric, neighborhood text, category_code text)
-language sql stable security invoker set search_path=''
+returns table(id uuid,amount numeric,neighborhood text,category_code text)
+language sql stable security invoker set search_path = public
 as $$
   select t.id,t.amount,t.neighborhood,t.category_code
   from public.tariffs t
-  where t.active=true
-    and lower(trim(t.neighborhood))=lower(trim(p_neighborhood))
-    and upper(t.category_code)=upper(p_category)
+  where t.active=true and lower(trim(t.neighborhood))=lower(trim(p_neighborhood)) and upper(t.category_code)=upper(p_category)
   order by t.amount asc limit 1;
 $$;
-
 grant execute on function public.get_tariff(text,text) to authenticated;
 
 create or replace function public.create_service(
-  p_category_code text,
-  p_pickup_neighborhood text,
-  p_pickup_address text,
-  p_pickup_lat double precision,
-  p_pickup_lng double precision,
-  p_dropoff_neighborhood text,
-  p_dropoff_address text,
-  p_dropoff_lat double precision,
-  p_dropoff_lng double precision,
-  p_restaurant_name text,
-  p_notes text,
-  p_tip numeric default 0
+  p_category_code text,p_pickup_neighborhood text,p_pickup_address text,
+  p_pickup_lat double precision,p_pickup_lng double precision,
+  p_dropoff_neighborhood text,p_dropoff_address text,
+  p_dropoff_lat double precision,p_dropoff_lng double precision,
+  p_restaurant_name text,p_notes text,p_tip numeric default 0
 )
 returns public.services
-language plpgsql
-security definer
-set search_path = ''
+language plpgsql security definer set search_path = public, private
 as $$
-declare
-  v_client uuid := (select private.client_id());
-  v_cat uuid;
-  v_base numeric;
-  v_service public.services;
+declare v_client uuid := (select private.client_id()); v_cat uuid; v_base numeric; v_service public.services;
 begin
   if v_client is null then raise exception 'client_not_found'; end if;
   if p_tip is null or p_tip < 0 then raise exception 'invalid_tip'; end if;
@@ -973,60 +889,37 @@ begin
   if v_cat is null then raise exception 'category_not_found'; end if;
   select amount into v_base from public.get_tariff(p_pickup_neighborhood,p_category_code) limit 1;
   if v_base is null then raise exception 'tariff_not_found'; end if;
-  insert into public.services(
-    client_id,category_id,category_code,status,
-    pickup_neighborhood,pickup_address,pickup_lat,pickup_lng,
-    dropoff_neighborhood,dropoff_address,dropoff_lat,dropoff_lng,
-    restaurant_name,notes,base_price,tip,total_price
-  ) values(
-    v_client,v_cat,p_category_code,'waiting',
-    p_pickup_neighborhood,p_pickup_address,p_pickup_lat,p_pickup_lng,
-    p_dropoff_neighborhood,p_dropoff_address,p_dropoff_lat,p_dropoff_lng,
-    p_restaurant_name,p_notes,v_base,p_tip,v_base+p_tip
-  ) returning * into v_service;
+  insert into public.services(client_id,category_id,category_code,status,pickup_neighborhood,pickup_address,pickup_lat,pickup_lng,dropoff_neighborhood,dropoff_address,dropoff_lat,dropoff_lng,restaurant_name,notes,base_price,tip,total_price)
+  values(v_client,v_cat,p_category_code,'waiting',p_pickup_neighborhood,p_pickup_address,p_pickup_lat,p_pickup_lng,p_dropoff_neighborhood,p_dropoff_address,p_dropoff_lat,p_dropoff_lng,p_restaurant_name,p_notes,v_base,p_tip,v_base+p_tip)
+  returning * into v_service;
   return v_service;
 end;
 $$;
-
 grant execute on function public.create_service(text,text,text,double precision,double precision,text,text,double precision,double precision,text,text,numeric) to authenticated;
 
 create or replace function public.accept_service(p_service_id uuid)
 returns public.services
-language plpgsql
-security definer
-set search_path = ''
+language plpgsql security definer set search_path = public, private, extensions
 as $$
-declare
-  v_driver uuid := (select private.driver_id());
-  v_service public.services;
+declare v_driver uuid := (select private.driver_id()); v_service public.services; v_code text;
 begin
   if v_driver is null then raise exception 'driver_not_found'; end if;
-  select * into v_service from public.services
-  where id=p_service_id and status in('waiting','assigned') and (driver_id is null or driver_id=v_driver)
-  for update;
+  select * into v_service from public.services where id=p_service_id and status in('waiting','assigned') and (driver_id is null or driver_id=v_driver) for update;
   if not found then raise exception 'service_not_available'; end if;
-  update public.services
-    set driver_id=v_driver,status='accepted',accepted_at=now(),verification_code=lpad((floor(random()*1000))::int::text,3,'0'),verification_code_expires_at=now()+interval '2 hours'
-    where id=p_service_id
-    returning * into v_service;
+  v_code:=lpad((floor(random()*1000))::int::text,3,'0');
+  update public.services set driver_id=v_driver,status='accepted',accepted_at=now(),verification_code=v_code,verification_code_expires_at=now()+interval '2 hours' where id=p_service_id returning * into v_service;
   update public.drivers set status='busy' where id=v_driver;
-  insert into public.service_assignments(service_id,driver_id,assigned_by,decision,accepted_at)
-  values(p_service_id,v_driver,'driver','accepted',now());
+  insert into public.service_assignments(service_id,driver_id,assigned_by,decision,accepted_at) values(p_service_id,v_driver,'driver','accepted',now());
   return v_service;
 end;
 $$;
-
 grant execute on function public.accept_service(uuid) to authenticated;
 
 create or replace function public.start_service(p_service_id uuid)
 returns public.services
-language plpgsql
-security definer
-set search_path=''
+language plpgsql security definer set search_path = public, private
 as $$
-declare
-  v_driver uuid := (select private.driver_id());
-  v_service public.services;
+declare v_driver uuid := (select private.driver_id()); v_service public.services;
 begin
   select * into v_service from public.services where id=p_service_id and driver_id=v_driver and status='accepted' for update;
   if not found then raise exception 'service_not_ready'; end if;
@@ -1034,184 +927,142 @@ begin
   return v_service;
 end;
 $$;
-
 grant execute on function public.start_service(uuid) to authenticated;
 
 create or replace function public.complete_service(p_service_id uuid,p_payment_method text default null,p_delivery_photo_path text default null)
 returns public.services
-language plpgsql
-security definer
-set search_path=''
+language plpgsql security definer set search_path = public, private
 as $$
-declare
-  v_driver uuid := (select private.driver_id());
-  v_service public.services;
-  v_url text;
+declare v_driver uuid := (select private.driver_id()); v_service public.services;
 begin
   select * into v_service from public.services where id=p_service_id and driver_id=v_driver and status in('accepted','in_progress') for update;
   if not found then raise exception 'service_not_owned_or_not_active'; end if;
-  if p_delivery_photo_path is not null then
-    v_url := p_delivery_photo_path;
-  end if;
-  update public.services
-    set status='completed',completed_at=now(),payment_method=p_payment_method,delivery_photo_path=p_delivery_photo_path,delivery_photo_url=v_url
-    where id=p_service_id
-    returning * into v_service;
+  update public.services set status='completed',completed_at=now(),payment_method=p_payment_method,delivery_photo_path=p_delivery_photo_path,delivery_photo_url=p_delivery_photo_path where id=p_service_id returning * into v_service;
   update public.drivers set status='available' where id=v_driver;
   return v_service;
 end;
 $$;
-
 grant execute on function public.complete_service(uuid,text,text) to authenticated;
 
 create or replace function public.cancel_service(p_service_id uuid,p_reason text default null)
 returns public.services
-language plpgsql
-security definer
-set search_path=''
+language plpgsql security definer set search_path = public, private
 as $$
-declare
-  v_service public.services;
-  v_client uuid := (select private.client_id());
-  v_driver uuid := (select private.driver_id());
+declare v_service public.services; v_client uuid := (select private.client_id()); v_driver uuid := (select private.driver_id());
 begin
   select * into v_service from public.services where id=p_service_id for update;
   if not found then raise exception 'service_not_found'; end if;
-  if not ((select private.is_admin()) or (v_service.client_id=v_client and v_service.status in('waiting','assigned')) or (v_service.driver_id=v_driver and v_service.status in('assigned','accepted'))) then
-    raise exception 'not_authorized_to_cancel';
-  end if;
-  update public.services set status='cancelled',cancelled_at=now(),notes=case when p_reason is null then notes else coalesce(notes,'')||E'
-Cancelación: '||p_reason end where id=p_service_id returning * into v_service;
+  if not ((select private.is_admin()) or (v_service.client_id=v_client and v_service.status in('waiting','assigned')) or (v_service.driver_id=v_driver and v_service.status in('assigned','accepted'))) then raise exception 'not_authorized_to_cancel'; end if;
+  update public.services set status='cancelled',cancelled_at=now(),notes=case when p_reason is null then notes else coalesce(notes,'')||E'\nCancelación: '||p_reason end where id=p_service_id returning * into v_service;
   if v_service.driver_id is not null then update public.drivers set status='available' where id=v_service.driver_id and status='busy'; end if;
   return v_service;
 end;
 $$;
-
 grant execute on function public.cancel_service(uuid,text) to authenticated;
 
 create or replace function public.set_driver_status(p_status text)
 returns public.drivers
-language plpgsql security definer set search_path=''
+language plpgsql security definer set search_path = public, private
 as $$
-declare
-  v_id uuid := (select private.driver_id());
-  v public.drivers;
+declare v_id uuid := (select private.driver_id()); v_driver public.drivers;
 begin
   if v_id is null then raise exception 'driver_not_found'; end if;
   if p_status not in('offline','available','busy') then raise exception 'invalid_driver_status'; end if;
-  update public.drivers set status=p_status where id=v_id returning * into v;
-  return v;
+  update public.drivers set status=p_status where id=v_id returning * into v_driver;
+  return v_driver;
 end;
 $$;
-
 grant execute on function public.set_driver_status(text) to authenticated;
 
-create or replace function public.record_driver_location(
-  p_service_id uuid,
-  p_lat double precision,
-  p_lng double precision,
-  p_accuracy double precision default null,
-  p_speed double precision default null,
-  p_heading double precision default null
-)
+create or replace function public.record_driver_location(p_service_id uuid,p_lat double precision,p_lng double precision,p_accuracy double precision default null,p_speed double precision default null,p_heading double precision default null)
 returns public.driver_locations
-language plpgsql security definer set search_path=''
+language plpgsql security definer set search_path = public, private
 as $$
-declare
-  v_driver uuid := (select private.driver_id());
-  v_row public.driver_locations;
+declare v_driver uuid := (select private.driver_id()); v_row public.driver_locations;
 begin
   if v_driver is null then raise exception 'driver_not_found'; end if;
   if p_lat not between -90 and 90 or p_lng not between -180 and 180 then raise exception 'invalid_coordinates'; end if;
-  insert into public.driver_locations(driver_id,service_id,lat,lng,accuracy)
-  values(v_driver,p_service_id,p_lat,p_lng,p_accuracy) returning * into v_row;
+  insert into public.driver_locations(driver_id,service_id,lat,lng,accuracy) values(v_driver,p_service_id,p_lat,p_lng,p_accuracy) returning * into v_row;
   update public.drivers set last_lat=p_lat,last_lng=p_lng,last_gps_at=now() where id=v_driver;
-  if p_service_id is not null then
-    update public.services set last_driver_lat=p_lat,last_driver_lng=p_lng,last_driver_gps_at=now()
-    where id=p_service_id and driver_id=v_driver and status in('accepted','in_progress');
-  end if;
+  if p_service_id is not null then update public.services set last_driver_lat=p_lat,last_driver_lng=p_lng,last_driver_gps_at=now() where id=p_service_id and driver_id=v_driver and status in('accepted','in_progress'); end if;
   return v_row;
 end;
 $$;
-
 grant execute on function public.record_driver_location(uuid,double precision,double precision,double precision,double precision,double precision) to authenticated;
 
--- Bootstrap de administrador: después de crear el usuario en Auth.
-create or replace function public.bootstrap_admin(p_auth_user_id uuid,p_full_name text default 'Administrador')
-returns void
-language plpgsql
-security definer
-set search_path=''
-as $$
-declare
-  v_email text;
-begin
-  if exists(select 1 from public.profiles where role='admin') then raise exception 'admin_already_exists'; end if;
-  select email into v_email from auth.users where id=p_auth_user_id;
-  if v_email is null then raise exception 'auth_user_not_found'; end if;
-  insert into public.profiles(auth_user_id,role,full_name,email) values(p_auth_user_id,'admin',p_full_name,v_email);
-  insert into public.app_roles(user_id,role) values(p_auth_user_id,'admin');
-end;
-$$;
-
-revoke all on function public.bootstrap_admin(uuid,text) from public,anon,authenticated;
-grant execute on function public.bootstrap_admin(uuid,text) to service_role;
-
 -- ------------------------------------------------------------
--- 10. TRIGGERS updated_at
+-- 9. TRIGGERS
 -- ------------------------------------------------------------
 
 drop trigger if exists trg_profiles_updated_at on public.profiles;
 create trigger trg_profiles_updated_at before update on public.profiles for each row execute procedure public.set_updated_at();
-
 drop trigger if exists trg_drivers_updated_at on public.drivers;
 create trigger trg_drivers_updated_at before update on public.drivers for each row execute procedure public.set_updated_at();
-
 drop trigger if exists trg_clients_updated_at on public.clients;
 create trigger trg_clients_updated_at before update on public.clients for each row execute procedure public.set_updated_at();
-
 drop trigger if exists trg_categories_updated_at on public.categories;
 create trigger trg_categories_updated_at before update on public.categories for each row execute procedure public.set_updated_at();
-
 drop trigger if exists trg_tariffs_updated_at on public.tariffs;
 create trigger trg_tariffs_updated_at before update on public.tariffs for each row execute procedure public.set_updated_at();
-
 drop trigger if exists trg_services_updated_at on public.services;
 create trigger trg_services_updated_at before update on public.services for each row execute procedure public.set_updated_at();
-
 drop trigger if exists trg_driver_documents_updated_at on public.driver_documents;
 create trigger trg_driver_documents_updated_at before update on public.driver_documents for each row execute procedure public.set_updated_at();
 drop trigger if exists trg_media_assets_updated_at on public.media_assets;
 create trigger trg_media_assets_updated_at before update on public.media_assets for each row execute procedure public.set_updated_at();
 
 -- ------------------------------------------------------------
--- 11. SEMILLAS
+-- 10. STORAGE
 -- ------------------------------------------------------------
 
-insert into public.categories(code,name,active)
-values ('PERSONAS','Personas',true),('RESTAURANTE','Restaurante',true),('DOCUMENTOS','Documentos',true)
-on conflict(code) do update set name=excluded.name,active=true;
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
+ ('driver-documents','driver-documents',false,15728640,array['image/jpeg','image/png','application/pdf']),
+ ('delivery-proofs','delivery-proofs',false,15728640,array['image/jpeg','image/png','image/webp']),
+ ('profiles','profiles',true,5242880,array['image/jpeg','image/png','image/webp']),
+ ('media','media',true,104857600,array['image/jpeg','image/png','image/webp','video/mp4','video/webm'])
+on conflict(id) do nothing;
 
-insert into public.tariffs(neighborhood,category_code,amount,active)
-values
- ('Centro','PERSONAS',7000,true),
- ('Rodadero','PERSONAS',9000,true),
- ('Bastidas','PERSONAS',10000,true),
- ('Centro','RESTAURANTE',8000,true),
- ('Centro','DOCUMENTOS',7000,true)
-;
+drop policy if exists driver_docs_upload on storage.objects;
+drop policy if exists driver_docs_read on storage.objects;
+drop policy if exists driver_docs_update on storage.objects;
+drop policy if exists driver_docs_delete on storage.objects;
+drop policy if exists delivery_proofs_upload on storage.objects;
+drop policy if exists delivery_proofs_read on storage.objects;
+drop policy if exists delivery_proofs_delete on storage.objects;
+drop policy if exists profiles_public_read on storage.objects;
+drop policy if exists profiles_self_write on storage.objects;
+drop policy if exists profiles_self_update on storage.objects;
+drop policy if exists profiles_self_delete on storage.objects;
+drop policy if exists media_public_read on storage.objects;
+drop policy if exists media_admin_write on storage.objects;
+
+create policy driver_docs_upload on storage.objects for insert to authenticated with check(bucket_id='driver-documents' and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text));
+create policy driver_docs_read on storage.objects for select to authenticated using(bucket_id='driver-documents' and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text));
+create policy driver_docs_update on storage.objects for update to authenticated using(bucket_id='driver-documents' and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text)) with check(bucket_id='driver-documents' and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text));
+create policy driver_docs_delete on storage.objects for delete to authenticated using(bucket_id='driver-documents' and ((select private.is_admin()) or (storage.foldername(name))[1]=(select private.driver_id())::text));
+
+create policy delivery_proofs_upload on storage.objects for insert to authenticated with check(bucket_id='delivery-proofs' and ((select private.is_admin()) or exists(select 1 from public.services s where s.id::text=(storage.foldername(name))[1] and s.driver_id=(select private.driver_id()))));
+create policy delivery_proofs_read on storage.objects for select to authenticated using(bucket_id='delivery-proofs' and ((select private.is_admin()) or exists(select 1 from public.services s where s.id::text=(storage.foldername(name))[1] and (s.client_id=(select private.client_id()) or s.driver_id=(select private.driver_id())))));
+create policy delivery_proofs_delete on storage.objects for delete to authenticated using(bucket_id='delivery-proofs' and ((select private.is_admin()) or exists(select 1 from public.services s where s.id::text=(storage.foldername(name))[1] and s.driver_id=(select private.driver_id()))));
+
+create policy profiles_public_read on storage.objects for select to anon,authenticated using(bucket_id='profiles');
+create policy profiles_self_write on storage.objects for insert to authenticated with check(bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
+create policy profiles_self_update on storage.objects for update to authenticated using(bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text) with check(bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
+create policy profiles_self_delete on storage.objects for delete to authenticated using(bucket_id='profiles' and (storage.foldername(name))[1]=(select private.current_profile_id())::text);
+
+create policy media_public_read on storage.objects for select to anon,authenticated using(bucket_id='media');
+create policy media_admin_write on storage.objects for all to authenticated using(bucket_id='media' and (select private.is_admin())) with check(bucket_id='media' and (select private.is_admin()));
 
 -- ------------------------------------------------------------
--- 12. REALTIME
+-- 11. REALTIME
 -- ------------------------------------------------------------
 
 alter table public.services replica identity full;
 alter table public.messages replica identity full;
 alter table public.driver_locations replica identity full;
 alter table public.drivers replica identity full;
-alter table public.notifications replica identity full;
 
-DO $$
+do $$
 begin
   begin execute 'alter publication supabase_realtime add table public.services'; exception when duplicate_object then null; when undefined_object then null; end;
   begin execute 'alter publication supabase_realtime add table public.messages'; exception when duplicate_object then null; when undefined_object then null; end;
@@ -1220,31 +1071,87 @@ begin
 end $$;
 
 -- ------------------------------------------------------------
--- 13. GRANTS
+-- 12. GRANTS
 -- ------------------------------------------------------------
 
 grant usage on schema public to anon,authenticated;
-grant select on public.categories,public.tariffs to authenticated;
 grant select,insert,update,delete on all tables in schema public to authenticated;
-revoke all on public.app_roles from anon;
+grant select on public.categories,public.tariffs to authenticated;
+
+-- ------------------------------------------------------------
+-- 13. DATOS INICIALES
+-- ------------------------------------------------------------
+
+insert into public.categories(code,name,active) values
+ ('PERSONAS','Personas',true),('RESTAURANTE','Restaurante',true),('DOCUMENTOS','Documentos',true)
+on conflict(code) do update set name=excluded.name,active=true;
+
+insert into public.tariffs(neighborhood,category_code,amount,active) values
+ ('Centro','PERSONAS',7000,true),('Rodadero','PERSONAS',9000,true),('Bastidas','PERSONAS',10000,true),
+ ('Centro','RESTAURANTE',8000,true),('Centro','DOCUMENTOS',7000,true);
+
+-- ------------------------------------------------------------
+-- 14. CREAR EL PRIMER ADMIN
+-- ------------------------------------------------------------
+
+create or replace function public.bootstrap_admin(p_username text,p_password text,p_full_name text default 'Administrador',p_phone text default null)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, private, extensions
+as $$
+declare v_profile uuid; v_hash text;
+begin
+  if exists(select 1 from public.profiles where role='admin') then raise exception 'admin_already_exists'; end if;
+  if length(trim(coalesce(p_username,'')))<3 then raise exception 'invalid_username'; end if;
+  if length(coalesce(p_password,''))<4 then raise exception 'invalid_password'; end if;
+  v_hash:=crypt(p_password,gen_salt('bf',8));
+  insert into public.profiles(role,full_name,phone) values('admin',p_full_name,p_phone) returning id into v_profile;
+  insert into public.app_roles(profile_id,role) values(v_profile,'admin');
+  insert into private.app_credentials(profile_id,username,password_hash) values(v_profile,trim(p_username),v_hash);
+  return v_profile;
+end;
+$$;
+revoke all on function public.bootstrap_admin(text,text,text,text) from public,anon,authenticated;
+grant execute on function public.bootstrap_admin(text,text,text,text) to service_role;
+
+-- Bootstrap del primer administrador. Ejecutar como postgres/service_role.
+create or replace function public.bootstrap_admin_auto(p_full_name text default 'Administrador')
+returns jsonb
+language plpgsql security definer
+set search_path = public, private, extensions
+as $$
+declare v_profile uuid; v_username text := 'admin-motogo'; v_password text; v_hash text;
+begin
+  if exists(select 1 from public.profiles where role='admin') then raise exception 'admin_already_exists'; end if;
+  v_password := upper(substr(encode(gen_random_bytes(12),'hex'),1,6)) || '-' || upper(substr(encode(gen_random_bytes(12),'hex'),1,6));
+  insert into public.profiles(role,full_name) values('admin',coalesce(nullif(trim(p_full_name),''),'Administrador')) returning id into v_profile;
+  insert into public.app_roles(profile_id,role) values(v_profile,'admin');
+  v_hash := crypt(v_password,gen_salt('bf',8));
+  insert into private.app_credentials(profile_id,username,password_hash) values(v_profile,v_username,v_hash);
+  return jsonb_build_object('profile_id',v_profile,'username',v_username,'password',v_password);
+end;$$;
+revoke all on function public.bootstrap_admin_auto(text) from public,anon,authenticated;
+grant execute on function public.bootstrap_admin_auto(text) to service_role;
+
+-- Las credenciales de clientes/conductores las genera automáticamente admin_create_user().
+-- El administrador las recibe una sola vez en la respuesta RPC y en la interfaz.
 
 commit;
 
 -- ============================================================
--- PASO FINAL (FUERA DEL BLOQUE TRANSACTIONAL)
+-- INSTALACIÓN
 -- ============================================================
--- 1. En Supabase > Authentication > Users, crea un usuario admin.
---    Ejemplo de email: admin@motogo.co
---    El password debe corresponder al PIN mostrado por la app mediante
---    la misma regla: MotoGo#<PIN>#2026!
--- 2. Obtén su UUID y ejecuta como service_role/postgres:
---    select public.bootstrap_admin('UUID_DEL_USUARIO','Administrador');
--- 3. En Auth > Email, para altas internas de prueba puedes desactivar
---    temporalmente "Confirm email".
---
--- La app usa Supabase Auth real. El PIN visible en MotoGo nunca se guarda
--- como contraseña en tablas públicas; el HTML lo transforma a password de
--- Auth antes de signInWithPassword/signUp.
+-- 1) Ejecuta este archivo completo en Supabase SQL Editor.
+-- 2) En Authentication > Sign In / Providers, NO necesitas Email/OAuth.
+-- 3) Debes habilitar SOLO "Anonymous Sign-Ins", porque la app utiliza una
+--    identidad anónima técnica para obtener el rol authenticated y mantener
+--    RLS, Storage y Realtime. El usuario final NO entra con esa identidad.
+-- 4) Luego ejecuta con service_role/postgres:
+--      select public.bootstrap_admin('admin','UnaClaveSegura','Administrador',null);
+-- 5) Entra a la app como admin con ese usuario/contraseña.
+-- 6) El admin crea los usuarios de clientes/conductores desde la app.
+-- 7) Las contraseñas se guardan únicamente como hash bcrypt en private.app_credentials.
 -- ============================================================
 `;
 
@@ -1351,136 +1258,88 @@ async function storageSignedUrl(bucket,path,expires=900){
   if(!supa)return null;
   const {data,error}=await supa.storage.from(bucket).createSignedUrl(path,expires); if(error){console.warn(error);return null} return data?.signedUrl||null;
 }
-async function refreshAuthProfile(){
-  if(!supa)return;
-  const {data:{user}}=await supa.auth.getUser();
-  state.authUser=user||null;
-  if(!user){state.authProfile=null;return}
-  const {data:p,error}=await supa.from("profiles").select("*").eq("auth_user_id",user.id).maybeSingle();
-  if(error){console.warn("Perfil Auth",error);return}
-  state.authProfile=p||null;
-  if(p?.role==="driver") state.role="driver";
-  if(p?.role==="client") state.role="client";
-  if(p?.role==="admin") state.role="admin";
-  if(p?.role==="driver") state.session={role:"driver",token:"auth",profile:state.data.drivers.find(d=>d.profile_id===p.id)||null};
-  else if(p?.role==="client"){
-    let client=state.data.clients.find(c=>c.profile_id===p.id)||null;
-    if(!client){
-      const md=user.user_metadata||{};
-      const r=await rpc("create_client",{p_login:md.national_id||user.email,p_full_name:md.full_name||p.full_name||"Cliente",p_phone:md.phone||p.phone||"",p_national_id:md.national_id||p.national_id||null});
-      if(!r.error){await loadData();client=state.data.clients.find(c=>c.profile_id===p.id)||null;}
-    }
-    state.session={role:"client",token:"auth",profile:client};
-  }
-  else if(p?.role==="admin") state.session={role:"admin",token:"auth",profile:p};
-  if(state.session?.profile) localStorage.setItem(LS.session,JSON.stringify(state.session));
+async function ensureAnonymousAuth(){
+  if(!supa) return null;
+  const {data:{session}}=await supa.auth.getSession();
+  if(session?.user?.is_anonymous) return session.user;
+  if(session?.user){try{await supa.auth.signOut({scope:'local'})}catch{}}
+  const {data,error}=await supa.auth.signInAnonymously();
+  if(error){console.warn('Anonymous Auth',error);return null;}
+  return data?.user||null;
 }
-
-function openModal(title,html){$("modalTitle").textContent=title;$("modalBody").innerHTML=html;$("modalBackdrop").classList.add("open")}
-function closeModal(){$("modalBackdrop").classList.remove("open")}
-
+async function refreshAppSession(){
+  if(!supa) return false;
+  const {data:{session}}=await supa.auth.getSession();
+  if(!session?.user){state.session=null;state.authUser=null;return false;}
+  state.authUser=session.user;
+  const r=await supa.rpc('motogo_me');
+  if(r.error||!r.data?.length){state.session=null;return false;}
+  const p=r.data[0]; state.role=p.role; await loadData();
+  let profile=null;
+  if(state.role==='driver') profile=state.data.drivers.find(d=>d.profile_id===p.profile_id)||null;
+  else if(state.role==='client') profile=state.data.clients.find(c=>c.profile_id===p.profile_id)||null;
+  else profile={id:p.profile_id,full_name:p.full_name,phone:p.phone,email:p.email,national_id:p.national_id,role:'admin'};
+  if(!profile) return false;
+  state.session={role:state.role,token:'anonymous-auth',profile};
+  localStorage.setItem(LS.session,JSON.stringify(state.session));
+  return true;
+}
 function setRole(role){
   state.role=role;
-  ["driver","client","admin"].forEach(r=>$("role"+r.charAt(0).toUpperCase()+r.slice(1)).classList.toggle("active",role===r));
-  $("loginUser").placeholder=role==="driver"?"Usuario / cédula":"";
-  if(role==="client") $("loginUser").placeholder="Documento o correo";
-  if(role==="admin") $("loginUser").placeholder="admin";
-  $("loginPin").placeholder=role==="admin"?"PIN admin":"PIN de 4 dígitos";
-  $("registerClientBtn").classList.toggle("hidden",role!=="client");
+  ['driver','client','admin'].forEach(r=>$('role'+r.charAt(0).toUpperCase()+r.slice(1)).classList.toggle('active',role===r));
+  $('loginUser').placeholder='Usuario';
+  $('loginPin').type='password'; $('loginPin').placeholder='Contraseña';
+  $('registerClientBtn').classList.add('hidden'); $('recoverBtn').classList.add('hidden');
+  $('loginInfo').textContent='El administrador crea tu usuario y contraseña de MotoGo.';
 }
-
-$("roleDriver").onclick=()=>setRole("driver"); $("roleClient").onclick=()=>setRole("client"); $("roleAdmin").onclick=()=>setRole("admin");
+$('roleDriver').onclick=()=>setRole('driver'); $('roleClient').onclick=()=>setRole('client'); $('roleAdmin').onclick=()=>setRole('admin');
 
 async function login(){
-  const u=$("loginUser").value.trim(), p=$("loginPin").value.trim();
-  if(!u||!p){$("loginInfo").textContent="Completa usuario y PIN.";return}
-  $("loginInfo").textContent="Validando con Supabase Auth…";
-  if(!supa){
-    let ok=null;
-    if(state.role==="driver"){const d=state.data.drivers.find(x=>x.username===u||x.national_id===u);if(d&&d.pin===p)ok={role:"driver",profile:d};}
-    if(state.role==="client"){const c=state.data.clients.find(x=>x.login===u||x.email===u||x.national_id===u);if(c&&c.pin===p)ok={role:"client",profile:c};}
-    if(state.role==="admin"&&u==="admin"&&p==="12")ok={role:"admin",profile:{role:"admin",full_name:"Administrador"}};
-    if(!ok){$("loginInfo").textContent="Credenciales inválidas.";return}
-    state.session={...ok,token:"demo"}; localStorage.setItem(LS.session,JSON.stringify(state.session));
-  }else{
-    const r=await rpc("resolve_login",{p_role:state.role,p_login:u});
-    if(r.error||!r.data?.length){$("loginInfo").textContent="Usuario no encontrado.";return}
-    const identity=r.data[0];
-    const {data,error}=await supa.auth.signInWithPassword({email:identity.auth_email,password:authPassword(p)});
-    if(error||!data.user){console.warn(error);$("loginInfo").textContent=error?.message||"No fue posible iniciar sesión.";return}
-    state.authUser=data.user;
-    await loadData(); await refreshAuthProfile();
-    if(!state.session?.profile){$("loginInfo").textContent="La cuenta Auth no tiene un perfil MotoGo válido.";return}
+  const u=$('loginUser').value.trim(), p=$('loginPin').value;
+  if(!u||!p){$('loginInfo').textContent='Completa usuario y contraseña.';return;}
+  if(!supa){$('loginInfo').textContent='Supabase no está disponible.';return;}
+  $('loginInfo').textContent='Validando credenciales de MotoGo…';
+  const anonUser=await ensureAnonymousAuth();
+  if(!anonUser){$('loginInfo').textContent='No fue posible iniciar la sesión técnica.';return;}
+  const r=await supa.rpc('motogo_login',{p_role:state.role,p_username:u,p_password:p});
+  if(r.error||!r.data?.length){
+    const msg=String(r.error?.message||'');
+    $('loginInfo').textContent=msg.includes('account_locked')?'Cuenta bloqueada temporalmente.':'Usuario o contraseña incorrectos.';
+    return;
   }
-  localStorage.setItem(LS.session,JSON.stringify(state.session)); localStorage.setItem("motogo_role",state.role);
-  $("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");
+  const p0=r.data[0]; await loadData();
+  let profile=null;
+  if(state.role==='driver') profile=state.data.drivers.find(d=>d.profile_id===p0.profile_id)||null;
+  if(state.role==='client') profile=state.data.clients.find(c=>c.profile_id===p0.profile_id)||null;
+  if(state.role==='admin') profile={id:p0.profile_id,full_name:p0.full_name,phone:p0.phone,email:p0.email,role:'admin'};
+  if(!profile){$('loginInfo').textContent='El usuario no tiene un registro MotoGo válido.';return;}
+  state.session={role:state.role,token:'anonymous-auth',profile}; state.authUser=anonUser;
+  localStorage.setItem(LS.session,JSON.stringify(state.session)); localStorage.setItem('motogo_role',state.role);
+  $('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');
   await afterLogin();
 }
-$("loginBtn").onclick=login;
-$("loginPin").addEventListener("keydown",e=>{if(e.key==="Enter")login()});
+$('loginBtn').onclick=login;
+$('loginPin').addEventListener('keydown',e=>{if(e.key==='Enter')login()});
+$('registerClientBtn').classList.add('hidden'); $('recoverBtn').classList.add('hidden');
 
-async function registerClient(){
-  openModal("Crear cuenta de cliente",`
-    <div class="form">
-      <div class="row"><input id="rcName" placeholder="Nombre completo"><input id="rcId" placeholder="Documento de identidad"></div>
-      <div class="row"><input id="rcPhone" placeholder="Celular"><input id="rcEmail" type="email" placeholder="Correo" required></div>
-      <div class="small muted">Al registrarte se generará un PIN aleatorio de 4 dígitos. El PIN se mostrará una sola vez para que lo guardes.</div>
-      <button class="btn primary" onclick="createClient()">Crear cuenta</button>
-    </div>`);
-}
-$("registerClientBtn").onclick=registerClient;
-
-async function createClient(){
-  const full_name=$("rcName").value.trim(), national_id=$("rcId").value.trim(), phone=$("rcPhone").value.trim(), email=$("rcEmail").value.trim();
-  if(!full_name||!national_id||!phone||!email){return alert("Completa nombre, documento, celular y correo.")}
-  const pin=String(Math.floor(Math.random()*10000)).padStart(4,"0");
-  if(supa){
-    const {data,error}=await supa.auth.signUp({email,password:authPassword(pin),options:{data:{role:"client",full_name,national_id,phone}}});
-    if(error)return alert(error.message);
-    if(!data.user)return alert("Supabase no devolvió el usuario.");
-    if(!data.session)return alert("Cuenta creada. Revisa el correo de confirmación antes de iniciar sesión.");
-    const r=await rpc("create_client",{p_login:national_id,p_full_name:full_name,p_phone:phone,p_national_id:national_id});
-    if(r.error)return alert(r.error.message);
-    await loadData(); await refreshAuthProfile();
-  }else{
-    state.data.clients.push({id:uid(),login:national_id,pin,full_name,phone,email,national_id});persistState();
-  }
-  openModal("Cuenta creada",`<p>Guarda tu PIN. La contraseña real de Supabase Auth no se almacena en tablas públicas.</p><div class="pin-box">${pin}</div><button class="btn primary block" onclick="navigator.clipboard?.writeText('${pin}');alert('PIN copiado')">Copiar PIN</button>`);
-}
-
-async function recover(){
-  const role=state.role;
-  openModal("Recuperar acceso",`<div class="form"><p class="muted">Ingresa tu ${role==="driver"?"usuario/cédula/celular":"documento o correo"}. Se enviará un enlace de recuperación al correo asociado.</p><input id="recoverKey" placeholder="Usuario / documento / correo"><button class="btn primary" onclick="doRecover('${role}')">Enviar enlace</button></div>`);
-}
-$("recoverBtn").onclick=recover;
-
-async function doRecover(role){
-  const key=$("recoverKey").value.trim(); if(!key)return;
-  if(!supa)return alert("La recuperación Auth solo está disponible con Supabase conectado.");
-  const r=await rpc("resolve_login",{p_role:role,p_login:key});
-  const email=r.data?.[0]?.auth_email;
-  if(r.error||!email)return alert("No encontramos una cuenta con ese dato.");
-  const {error}=await supa.auth.resetPasswordForEmail(email,{redirectTo:location.href});
-  if(error)return alert(error.message);
-  closeModal();alert("Revisa el correo para restablecer tu acceso.");
-}
+async function doRecover(){alert('La recuperación de acceso la realiza el administrador. Solicita un cambio de contraseña.')}
 
 async function afterLogin(){
-  state.nav = state.role==="driver"?"home":state.role==="client"?"home":"dashboard";
-  $("sessionBadge").textContent=`${state.role.toUpperCase()} · ${state.session.profile.full_name||state.session.profile.role||""}`;
-  renderNav(); render();
-  if(state.role==="driver"){await ensureDriverDailyFace(); startDriverGPS();}
-  subscribeRealtime();
-  requestNotificationPermission();
+  state.nav=state.role==='driver'?'home':state.role==='client'?'home':'dashboard';
+  $('sessionBadge').textContent=`${state.role.toUpperCase()} · ${state.session.profile.full_name||''}`;
+  renderNav();render();
+  if(state.role==='driver'){await ensureDriverDailyFace();startDriverGPS();}
+  subscribeRealtime(); requestNotificationPermission();
 }
-
 async function logout(){
-  Object.values(state.watchers).forEach(w=>{try{navigator.geolocation.clearWatch(w)}catch{}})
-  state.watchers={}; if(state.realtimeChannel&&supa){try{await supa.removeChannel(state.realtimeChannel)}catch{}} state.realtimeChannel=null;
-  if(supa)await supa.auth.signOut(); state.realtimeConnected=false; localStorage.removeItem(LS.session); state.session=null; state.authUser=null; state.authProfile=null;
-  $("app").classList.add("hidden"); $("loginScreen").classList.remove("hidden"); $("loginInfo").textContent="Sesión cerrada.";
+  Object.values(state.watchers).forEach(w=>{try{navigator.geolocation.clearWatch(w)}catch{}}); state.watchers={};
+  if(state.realtimeChannel&&supa){try{await supa.removeChannel(state.realtimeChannel)}catch{}}
+  state.realtimeChannel=null; state.realtimeConnected=false;
+  if(supa){try{await supa.rpc('motogo_logout')}catch{};try{await supa.auth.signOut({scope:'local'})}catch{}}
+  localStorage.removeItem(LS.session);state.session=null;state.authUser=null;
+  $('app').classList.add('hidden');$('loginScreen').classList.remove('hidden');setRole(localStorage.getItem('motogo_role')||'driver');
 }
-$("logoutBtn").onclick=logout;
+$('logoutBtn').onclick=logout;
 
 function renderNav(){
   let items=[];
@@ -1679,11 +1538,36 @@ function renderAdminServices(){
 function renderAdminDrivers(){
  const d=state.data.drivers;
  $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Conductores</h2><div class="muted">Activos, disponibles, ocupados y documentos.</div></div><button class="btn primary" onclick="openAdminCreateDriver()">Crear conductor</button></div>
- <div class="grid g3">${d.map(x=>`<div class="card"><div class="service-top"><div><div class="strong">${esc(x.full_name)}</div><div class="tiny muted">${esc(x.plate||"Sin placa")} · ${esc(x.bike_type||"")}</div></div><span class="badge ${x.status==="available"?"green":x.status==="busy"?"yellow":"red"}">${esc(x.status||"offline")}</span></div><div class="tiny muted" style="margin-top:10px">${esc(x.phone||"")} · ${esc(x.national_id||"")}</div><div class="service-actions"><button class="btn" onclick="viewDriver('${x.id}')">Ver</button>${x.approved?`<span class="badge green">Aprobado</span>`:`<span class="badge red">Pendiente</span>`}</div></div>`).join("")}</div>`;
+ <div class="grid g3">${d.map(x=>{const access=x.status==='blocked'?'Bloqueado':x.approved?'Aprobado':'Pendiente'; const accessClass=x.status==='blocked'?'red':x.approved?'green':'yellow'; return `<div class="card"><div class="service-top"><div><div class="strong">${esc(x.full_name)}</div><div class="tiny muted">${esc(x.plate||"Sin placa")} · ${esc(x.bike_type||"")}</div></div><span class="badge ${x.status==="available"?"green":x.status==="busy"?"yellow":"red"}">${esc(x.status||"offline")}</span></div><div class="tiny muted" style="margin-top:10px">${esc(x.phone||"")} · ${esc(x.national_id||"")}</div><div class="service-actions"><button class="btn" onclick="viewDriver('${x.id}')">Ver</button><span class="badge ${accessClass}">${access}</span>${x.status==='blocked'?`<button class="btn primary" onclick="setDriverAccess('${x.id}','unblock')">Desbloquear</button>`:x.approved?`<button class="btn danger" onclick="setDriverAccess('${x.id}','block')">Bloquear</button>`:`<button class="btn primary" onclick="setDriverAccess('${x.id}','approve')">Aprobar</button>`}<button class="btn" onclick="resetUserPassword('${x.profile_id}','Conductor')">Restablecer contraseña</button></div></div>`}).join("")}</div>`;
 }
 function renderAdminClients(){
- const c=state.data.clients.sort((a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||"")));
- $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Clientes</h2><div class="muted">Ordenados por actividad reciente.</div></div></div><div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Documento</th><th>Teléfono</th><th>Último servicio</th><th>Servicios</th></tr></thead><tbody>${c.map(x=>{const rows=state.data.services.filter(s=>s.client_id===x.id).sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));return`<tr><td>${esc(x.full_name)}</td><td>${esc(x.national_id||x.login||"")}</td><td>${esc(x.phone||"")}</td><td>${esc(rows[0]?.created_at?.slice(0,16)||"—")}</td><td>${rows.length}</td></tr>`}).join("")}</tbody></table></div>`;
+ const c=state.data.clients.sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
+ $('view').innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Clientes</h2><div class="muted">Las credenciales se generan automáticamente; el administrador puede restablecerlas.</div></div><button class="btn primary" onclick="openAdminCreateClient()">Crear cliente</button></div><div class="table-wrap"><table class="table"><thead><tr><th>Cliente</th><th>Usuario</th><th>Documento</th><th>Teléfono</th><th>Servicios</th><th>Acciones</th></tr></thead><tbody>${c.map(x=>{const rows=state.data.services.filter(s=>s.client_id===x.id);return`<tr><td>${esc(x.full_name)}</td><td>${esc(x.login||'')}</td><td>${esc(x.national_id||'')}</td><td>${esc(x.phone||'')}</td><td>${rows.length}</td><td><button class="btn" onclick="resetUserPassword('${x.profile_id}','Cliente')">Restablecer contraseña</button></td></tr>`}).join('')}</tbody></table></div>`;
+}
+function openAdminCreateClient(){
+ openModal('Crear cliente',`<div class="form"><div class="row"><input id="acName" placeholder="Nombre completo"><input id="acId" placeholder="Cédula"></div><input id="acPhone" placeholder="Celular"><div class="card"><strong>Credenciales automáticas</strong><div class="tiny muted" style="margin-top:6px">MotoGo generará automáticamente un usuario único y una contraseña segura.</div></div><button class="btn primary" onclick="createClientByAdmin()">Generar y crear cliente</button></div>`);
+}
+async function createClientByAdmin(){
+ const row={full_name:$('acName').value.trim(),phone:$('acPhone').value.trim(),national_id:$('acId').value.trim()};
+ if(!row.full_name||!row.national_id)return alert('Completa nombre y cédula.');
+ const r=await rpc('admin_create_user',{p_role:'client',p_full_name:row.full_name,p_phone:row.phone,p_national_id:row.national_id});
+ if(r.error)return alert(String(r.error.message||'No fue posible crear el cliente.').replaceAll('_',' '));
+ const out=r.data; await loadData(); closeModal(); showGeneratedCredentials('Cliente creado',out);
+}
+async function resetUserPassword(profileId,label){
+ if(state.role!=='admin')return alert('Solo el administrador puede restablecer contraseñas.');
+ if(!confirm(`¿Restablecer la contraseña de este ${label.toLowerCase()}?`))return;
+ const r=await rpc('admin_reset_password',{p_profile_id:profileId});
+ if(r.error)return alert(String(r.error.message||'No fue posible restablecer la contraseña.').replaceAll('_',' '));
+ showGeneratedCredentials(`Contraseña de ${label} restablecida`,r.data);
+}
+async function setDriverAccess(driverId,action){
+ if(state.role!=='admin')return alert('Solo el administrador puede cambiar el acceso.');
+ const labels={approve:'aprobar',block:'bloquear',unblock:'desbloquear'};
+ if(!confirm(`¿Quieres ${labels[action]||action} este conductor?`))return;
+ const r=await rpc('admin_set_driver_access',{p_driver_id:driverId,p_action:action});
+ if(r.error)return alert(String(r.error.message||'No fue posible actualizar el acceso.').replaceAll('_',' '));
+ await loadData(); render();
 }
 function renderAdminTariffs(){
  $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Tarifas por barrio</h2><div class="muted">Ingreso manual o importación CSV.</div></div><div class="actions"><button class="btn primary" onclick="openTariffForm()">Agregar</button><label class="btn">Importar CSV<input id="csvFile" type="file" accept=".csv,text/csv" hidden onchange="importTariffs(event)"></label></div></div><div class="card"><div class="tiny muted">Formato CSV: barrio,categoria,valor</div></div><div class="table-wrap" style="margin-top:16px"><table class="table"><thead><tr><th>Barrio</th><th>Categoría</th><th>Valor</th><th>Acciones</th></tr></thead><tbody>${state.data.tariffs.map(t=>`<tr><td>${esc(t.neighborhood)}</td><td>${esc(t.category_code)}</td><td>${money(t.amount)}</td><td><button class="btn danger" onclick="deleteTariff('${t.id}')">Eliminar</button></td></tr>`).join("")}</tbody></table></div>`;
@@ -1699,7 +1583,7 @@ function renderAdminMedia(){
  $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Publicidad</h2><div class="muted">Imágenes y videos que podrá mostrar el cliente/conductor.</div></div></div><div class="card"><label class="btn">Seleccionar imágenes/videos<input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden onchange="previewMedia(event)"></label><button class="btn primary" style="margin-left:8px" onclick="uploadSelectedMedia()">Subir a Storage</button><div id="mediaPreview" class="grid g3" style="margin-top:14px"></div><p class="tiny muted">Los archivos se guardan en el bucket público <strong>media</strong>.</p></div><div class="grid g3" style="margin-top:16px">${state.data.media.map(m=>`<div class="card"><div class="strong">${esc(m.name||"Publicidad")}</div><div class="tiny muted">${esc(m.kind||"")}</div><a class="small" href="${esc(m.url)}" target="_blank">Abrir</a></div>`).join("")}</div>`;
 }
 function renderAdminSQL(){
- $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Instalación Supabase</h2><div class="muted">Copia el esquema completo al SQL Editor de Supabase y ejecútalo.</div></div><button class="btn primary" onclick="navigator.clipboard.writeText(SETUP_SQL);alert('SQL copiado')">Copiar SQL</button></div><div class="card"><textarea style="height:520px;font-family:ui-monospace,monospace;font-size:12px">${esc(SETUP_SQL)}</textarea></div><div class="card" style="margin-top:16px"><strong>Instalación:</strong> primero ejecuta el SQL, luego crea los usuarios en Supabase Auth y vincula el admin. <strong>Nota de seguridad:</strong> la clave anon/publishable puede ir en frontend. No coloques nunca una service_role key aquí. El envío de WhatsApp debe hacerse mediante un backend o Edge Function para proteger la API key.</div>`;
+ $("view").innerHTML=`<div class="toolbar"><div><h2 style="margin:0">Instalación Supabase</h2><div class="muted">Copia el esquema completo al SQL Editor de Supabase y ejecútalo.</div></div><button class="btn primary" onclick="navigator.clipboard.writeText(SETUP_SQL);alert('SQL copiado')">Copiar SQL</button></div><div class="card"><textarea style="height:520px;font-family:ui-monospace,monospace;font-size:12px">${esc(SETUP_SQL)}</textarea></div><div class="card" style="margin-top:16px"><strong>Instalación:</strong> primero ejecuta el SQL, luego genera el admin mediante bootstrap_admin_auto; después el admin crea clientes y conductores desde la app. <strong>Nota de seguridad:</strong> la clave anon/publishable puede ir en frontend. No coloques nunca una service_role key aquí. El envío de WhatsApp debe hacerse mediante un backend o Edge Function para proteger la API key.</div>`;
 }
 
 async function toggleDriverStatus(){
@@ -1782,13 +1666,18 @@ async function confirmAssign(id){
 }
 function notifyDriver(driver,s){notifyStrong("Servicio asignado",`Tienes un servicio ${s.category_code}. Código ${s.verification_code||""}`);alert(`Servicio asignado a ${driver.full_name}`)}
 function openAdminCreateDriver(){
- openModal("Crear conductor",`<div class="form"><div class="row"><input id="adName" placeholder="Nombres y apellidos"><input id="adId" placeholder="Cédula"></div><div class="row"><input id="adPhone" placeholder="Celular"><input id="adUser" placeholder="Usuario"></div><input id="adEmail" type="email" placeholder="Correo exacto del usuario creado en Supabase Auth"><div class="row"><input id="adPlate" placeholder="Placa moto"><input id="adModel" placeholder="Modelo"></div><div class="row"><select id="adType">${["Boxer","MRX","XLR","NKD","NXR","XTZ","XR","XRE","CB","FZ","Discover","Pulsar","Apache","GN","DR","Otro"].map(x=>`<option>${x}</option>`).join("")}</select><input id="adPin" maxlength="4" inputmode="numeric" placeholder="PIN 4 dígitos (opcional)"></div><div class="tiny muted">Documentos: licencia de tránsito, tarjeta de propiedad, cédula, SOAT y tecnomecánica. Puedes adjuntarlos al completar el registro.</div><button class="btn primary" onclick="createDriver()">Crear conductor</button></div>`);
+ openModal('Crear conductor',`<div class="form"><div class="row"><input id="adName" placeholder="Nombres y apellidos"><input id="adId" placeholder="Cédula"></div><input id="adPhone" placeholder="Celular"><div class="row"><input id="adPlate" placeholder="Placa moto"><input id="adModel" placeholder="Modelo"></div><select id="adType">${['Boxer','MRX','XLR','NKD','NXR','XTZ','XR','XRE','CB','FZ','Discover','Pulsar','Apache','GN','DR','Otro'].map(x=>`<option>${x}</option>`).join('')}</select><div class="card"><strong>Credenciales automáticas</strong><div class="tiny muted" style="margin-top:6px">MotoGo generará automáticamente un usuario único y una contraseña segura.</div></div><button class="btn primary" onclick="createDriver()">Generar y crear conductor</button></div>`);
 }
 async function createDriver(){
- const row={username:$("adUser").value.trim()||$("adId").value.trim(),full_name:$("adName").value.trim(),phone:$("adPhone").value.trim(),national_id:$("adId").value.trim(),plate:$("adPlate").value.trim(),bike_model:$("adModel").value.trim(),bike_type:$("adType").value};
- const authEmail=$("adEmail").value.trim(); if(!authEmail)return alert("Indica el correo del usuario existente en Supabase Auth.");
- if(supa){const r=await rpc("create_driver",{p_auth_email:authEmail,p_username:row.username,p_full_name:row.full_name,p_phone:row.phone,p_national_id:row.national_id,p_plate:row.plate,p_bike_model:row.bike_model,p_bike_type:row.bike_type,p_approved:false});if(r.error)return alert(r.error.message);row.id=r.data;await loadData()}else{row.id=uid();row.pin="1234";row.approved=true;row.status="offline";state.data.drivers.push(row);persistState()}
- closeModal();openModal("Conductor vinculado",`<p>${esc(row.full_name)} quedó vinculado al usuario Auth <strong>${esc(authEmail)}</strong>.</p><p class="tiny muted">El PIN/contraseña se administra desde Supabase Auth; no se guarda en tablas públicas.</p>`);
+ const row={full_name:$('adName').value.trim(),phone:$('adPhone').value.trim(),national_id:$('adId').value.trim(),plate:$('adPlate').value.trim(),bike_model:$('adModel').value.trim(),bike_type:$('adType').value};
+ if(!row.full_name||!row.national_id)return alert('Completa nombre y cédula.');
+ const r=await rpc('admin_create_user',{p_role:'driver',p_full_name:row.full_name,p_phone:row.phone,p_national_id:row.national_id,p_plate:row.plate,p_bike_model:row.bike_model,p_bike_type:row.bike_type});
+ if(r.error)return alert(String(r.error.message||'No fue posible crear el conductor.').replaceAll('_',' '));
+ const out=r.data; await loadData(); closeModal(); showGeneratedCredentials('Conductor creado',out);
+}
+function showGeneratedCredentials(title,out){
+ const user=String(out?.username||''); const pass=String(out?.password||'');
+ openModal(title,`<div class="card"><div class="strong">${esc(out?.full_name||'Cuenta MotoGo')}</div><div class="label" style="margin-top:14px">Usuario</div><div class="strong" style="font-size:20px">${esc(user)}</div><div class="label" style="margin-top:14px">Contraseña temporal</div><div class="strong" style="font-size:20px;letter-spacing:2px">${esc(pass)}</div><div class="service-actions" style="margin-top:14px"><button class="btn" onclick="copyText('${user}')">Copiar usuario</button><button class="btn" onclick="copyText('${pass}')">Copiar contraseña</button></div></div><p class="tiny muted">Guarda estas credenciales y entrégalas al usuario. La contraseña se muestra una sola vez.</p><button class="btn primary block" onclick="closeModal()">Listo</button>`);
 }
 function viewDriver(id){const d=state.data.drivers.find(x=>x.id===id);openModal("Perfil de conductor",`<div class="grid g2"><div><div class="strong">${esc(d.full_name)}</div><div class="muted">${esc(d.phone||"")} · ${esc(d.national_id||"")}</div><div class="muted">${esc(d.plate||"")} · ${esc(d.bike_type||"")}</div></div><div><span class="badge ${d.approved?"green":"red"}">${d.approved?"Aprobado":"Pendiente"}</span></div></div><div class="map-holder" style="margin-top:14px"><div id="modalMap" style="height:260px;border-radius:14px"></div></div>`);setTimeout(()=>{const m=L.map("modalMap").setView([d.last_lat||11.2408,d.last_lng||-74.204],14);L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(m);L.marker([d.last_lat||11.2408,d.last_lng||-74.204]).addTo(m).bindPopup(d.full_name).openPopup()},40)}
 function openTariffForm(){openModal("Nueva tarifa",`<div class="form"><div class="row"><input id="tfNeighborhood" placeholder="Barrio"><select id="tfCat">${state.data.categories.map(c=>`<option>${esc(c.code)}</option>`).join("")}</select></div><input id="tfAmount" type="number" placeholder="Valor COP"><button class="btn primary" onclick="addTariff()">Guardar</button></div>`)}
@@ -1922,15 +1811,12 @@ async function subscribeRealtime(){
  }
 }
 async function boot(){
- ensureDemo();
- if(supa){
-   const {data:{session}}=await supa.auth.getSession();
-   if(session?.user){await loadData();await refreshAuthProfile();}
-   supa.auth.onAuthStateChange((event,sessionNow)=>{state.authUser=sessionNow?.user||null;});
- }
- if(state.session){$("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");await afterLogin();}
- else setRole(localStorage.getItem("motogo_role")||"driver");
- if("Notification"in window&&Notification.permission==="default"){}
+  ensureDemo();
+  if(supa){
+    const restored=await refreshAppSession();
+    if(restored){$('loginScreen').classList.add('hidden');$('app').classList.remove('hidden');await afterLogin();}
+    else setRole(localStorage.getItem('motogo_role')||'driver');
+  }else setRole(localStorage.getItem('motogo_role')||'driver');
 }
 boot();
 </script>
