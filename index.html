@@ -159,7 +159,27 @@ async function renderDriver(){
   const {data:p}=await sb.from("profiles").select("*").eq("id",d.id).single();saveSession({...d,...p});
   const {data:drv}=await sb.from("drivers").select("face_descriptor").eq("id",d.id).maybeSingle();
   const hasFace=!!drv?.face_descriptor?.length;
-  m.innerHTML=`<div class="title"><h1>Mi perfil</h1></div><div class="grid g2"><div class="card"><h2>${esc(p.full_name)}</h2><div class="grid g2">${["phone","document_number","plate","model","bike_type"].map(k=>`<div><span class="muted small">${esc(k)}</span><br><b>${esc(p[k]||d[k]||"—")}</b></div>`).join("")}</div><hr class="hr"><label>QR para recibir pagos</label><input id="paymentQr" value="${esc(p.payment_qr_url||"")}" placeholder="URL o referencia del QR"><button class="btn primary" style="margin-top:8px" onclick="savePaymentQR()">Guardar</button></div>
+  m.innerHTML=`<div class="title"><h1>Mi perfil</h1></div><div class="grid g2">
+  <div class="card">
+   <div class="row" style="align-items:center;gap:12px">
+    <img id="profileAvatar" class="avatar" style="width:64px;height:64px" src="${esc(p.avatar_url||"")}" onerror="this.style.opacity=.15">
+    <div>
+     <h2 style="margin:0">${esc(p.full_name)}</h2>
+     <label class="btn sm" style="display:inline-block;margin-top:6px">Cambiar foto<input id="avatarFile" type="file" accept="image/*" style="display:none" onchange="uploadOwnAvatar(event,'${d.id}')"></label>
+    </div>
+   </div>
+   <hr class="hr">
+   <div class="grid g2">${["phone","document_number","plate","model","bike_type"].map(k=>`<div><span class="muted small">${esc(k)}</span><br><b>${esc(p[k]||d[k]||"—")}</b></div>`).join("")}</div>
+   <hr class="hr">
+   <label>QR para recibir pagos</label>
+   <div class="row" style="align-items:flex-start;gap:12px">
+    <img id="paymentQrPreview" class="qr" style="width:120px;height:120px;${p.payment_qr_url?"":"display:none"}" src="${esc(p.payment_qr_url||"")}" onerror="this.style.display='none'" alt="QR de pagos">
+    <div style="flex:1">
+     <label class="btn sm" style="display:inline-block">Subir imagen de mi QR de pagos<input id="paymentQrFile" type="file" accept="image/*" style="display:none" onchange="uploadPaymentQr(event,'${d.id}')"></label>
+     <p class="small muted" style="margin-top:6px">Sube la foto del código QR de Nequi/Daviplata/etc. El cliente lo verá al momento de pagar.</p>
+    </div>
+   </div>
+  </div>
   <div class="card"><h2>QR de identificación</h2><img id="driverQrImage" class="qr" alt="QR del conductor"><div class="small muted" style="text-align:center">Código alterno: <b>${esc(p.profile_code||"")}</b></div></div>
   <div class="card"><h2>Reconocimiento facial</h2><p class="muted small">${hasFace?"Ya tienes un rostro registrado. Puedes actualizarlo si cambia tu apariencia (lentes, barba, etc.).":"Aún no has registrado tu rostro. Es necesario para la verificación diaria."}</p><button class="btn primary" onclick="registerFace('${d.id}')">${hasFace?"Actualizar mi rostro":"Registrar mi rostro"}</button></div></div>`;
   renderDriverQr(d.id,p.profile_code);return;
@@ -179,7 +199,9 @@ async function acceptService(sid){const d=current();const q=await sb.from("servi
 async function acceptAssigned(sid){const d=current();const q=await sb.from("services").update({status:"accepted"}).eq("id",sid).eq("driver_id",d.id).eq("status","assigned");if(q.error){toast(q.error.message);return}toast("Servicio aceptado");playAlert();render()}
 async function setOnline(on){const d=current();const status=on?"available":"offline";const q=await sb.from("drivers").update({online:on,status}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,online:on,status});render()}}
 async function driverCreateService(e){e.preventDefault();const f=new FormData(e.target),cat=f.get("category"),price=+f.get("price"),tip=+f.get("tip")||0;const d=current();const payload={driver_id:d.id,category:cat,customer_name:f.get("customer"),pickup_neighborhood:f.get("pickup_neighborhood"),pickup_address:f.get("pickup_address"),dropoff_neighborhood:f.get("dropoff_neighborhood"),dropoff_address:f.get("dropoff_address"),price,tip,notes:f.get("notes"),status:"in_progress",accepted_at:new Date().toISOString(),started_at:new Date().toISOString()};const q=await sb.from("services").insert(payload).select().single();if(q.error)toast(q.error.message);else{await sb.from("drivers").update({online:false,status:"busy",busy:true}).eq("id",d.id);toast("Servicio creado");render()}}
-async function savePaymentQR(){const d=current(),url=$("#paymentQr").value.trim();const q=await sb.from("profiles").update({payment_qr_url:url}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,payment_qr_url:url});toast("QR guardado")}}
+async function savePaymentQR(){const d=current(),url=$("#paymentQr")?.value?.trim();if(url==null)return;const q=await sb.from("profiles").update({payment_qr_url:url}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,payment_qr_url:url});toast("QR guardado")}}
+async function uploadOwnAvatar(e,idv){const file=e.target.files[0];if(!file)return;const url=await upload("driver-photos",`${idv}-${Date.now()}`,file);if(!url)return;const q=await sb.from("profiles").update({avatar_url:url}).eq("id",idv);if(q.error){toast(q.error.message);return}const img=$("#profileAvatar");if(img){img.src=url;img.style.opacity=1}saveSession({...current(),avatar_url:url});toast("Foto actualizada")}
+async function uploadPaymentQr(e,idv){const file=e.target.files[0];if(!file)return;const url=await upload("payment-qr",`${idv}-${Date.now()}`,file);if(!url)return;const q=await sb.from("profiles").update({payment_qr_url:url}).eq("id",idv);if(q.error){toast(q.error.message);return}const img=$("#paymentQrPreview");if(img){img.src=url;img.style.display="block"}saveSession({...current(),payment_qr_url:url});toast("QR de pagos actualizado")}
 async function categoryOptions(){if(!sb)return "<option>Configura Supabase</option>";const {data}=await sb.from("categories").select("id,name").eq("active",true).order("name");return (data||[]).map(x=>`<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("")}
 function renderDriverQr(driverId,profileCode){const img=$("#driverQrImage");if(!img)return;const qrData=JSON.stringify({type:"motorigo-driver",id:driverId,code:profileCode||""});QRCode.toDataURL(qrData,{width:300,margin:2},(err,url)=>{if(err){console.error("QR error:",err);toast("No se pudo generar el QR");return}img.src=url});}
 
@@ -363,8 +385,9 @@ async function serviceDetail(sid){
  const thread=await ensureServiceThread(sid,s.client_id,s.driver_id,null);
  const dv=d?{...d,...(d.drivers||{})}:null;
  const codeLine=session.role==="driver"&&s.driver_verification_code&&!s.driver_verified?`<p><b>Código secreto para el cliente:</b> <span class="stat">${esc(s.driver_verification_code)}</span></p>`:"";
+ const payQrBlock=(session.role==="client"&&dv?.payment_qr_url)?`<div class="card" style="margin-top:10px;text-align:center"><div class="small muted" style="margin-bottom:6px">QR para pagarle al conductor</div><img src="${esc(dv.payment_qr_url)}" class="qr" onerror="this.parentElement.style.display='none'"></div>`:"";
  modal(`<div class="title"><div><span class="tag">${esc(s.category)}</span><h2>${esc(s.customer_name||"Servicio")}</h2></div><button class="btn" onclick="closeModal()">Cerrar</button></div>
- <div class="grid g2"><div><p><b>Recogida:</b> ${esc(s.pickup_address||"")}</p><p><b>Destino:</b> ${esc(s.dropoff_address||"")}</p><p><b>Total:</b> ${money(s.total)}</p><p><b>Propina:</b> ${money(s.tip)}</p><p><b>Estado:</b> ${esc(s.status)}</p>${dv?`<p><b>Conductor:</b> ${esc(dv.full_name)} · ${esc(dv.model||"")} ${esc(dv.plate||"")}</p>`:""}${codeLine}${session.role==="client"&&s.driver_id&&!s.driver_verified?`<button class="btn primary" onclick="openVerifyDriver('${s.id}')">Verificar conductor</button>`:""}</div><div><div class="map" id="trackingMap">${dv?.latitude?"":"GPS no disponible"}</div><div id="trackingInfo" class="small muted" style="text-align:center;margin-top:6px"></div></div></div><hr class="hr"><h3>Chat privado</h3>${chatHTML(thread)}<div id="serviceActions"></div>`);
+ <div class="grid g2"><div><p><b>Recogida:</b> ${esc(s.pickup_address||"")}</p><p><b>Destino:</b> ${esc(s.dropoff_address||"")}</p><p><b>Total:</b> ${money(s.total)}</p><p><b>Propina:</b> ${money(s.tip)}</p><p><b>Estado:</b> ${esc(s.status)}</p>${dv?`<p><b>Conductor:</b> ${esc(dv.full_name)} · ${esc(dv.model||"")} ${esc(dv.plate||"")}</p>`:""}${codeLine}${session.role==="client"&&s.driver_id&&!s.driver_verified?`<button class="btn primary" onclick="openVerifyDriver('${s.id}')">Verificar conductor</button>`:""}${payQrBlock}</div><div><div class="map" id="trackingMap">${dv?.latitude?"":"GPS no disponible"}</div><div id="trackingInfo" class="small muted" style="text-align:center;margin-top:6px"></div></div></div><hr class="hr"><h3>Chat privado</h3>${chatHTML(thread)}<div id="serviceActions"></div>`);
  bindChat(thread);renderServiceActions(s);
  if(["accepted","in_progress"].includes(s.status)){
   const clientPos=session.role==="client"?await getCurrentPosition():null;
