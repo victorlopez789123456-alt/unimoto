@@ -3,453 +3,297 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0b1220">
-<title>MotoriGo — Plataforma de servicios</title>
-
-<!-- Supabase: browser client. La clave usada aquí es la ANON/PUBLISHABLE, nunca service_role. -->
+<meta name="theme-color" content="#101827">
+<title>MotoriGo</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
-<!-- Face recognition, open source. Los modelos se cargan desde CDN. -->
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
-
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 <style>
-:root{--bg:#f4f7fb;--card:#fff;--ink:#142033;--muted:#65748b;--brand:#ffcf00;--brand2:#f5b900;--dark:#0b1220;--ok:#19a974;--danger:#dc3545;--line:#e5eaf1;--shadow:0 10px 30px rgba(11,18,32,.08)}
-*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--ink)}
-button,input,select,textarea{font:inherit}button{cursor:pointer;border:0}.hidden{display:none!important}.app{min-height:100vh}
-.top{height:64px;background:var(--dark);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:20}
-.logo{font-weight:900;letter-spacing:.4px}.logo span{color:var(--brand)}
-.top-actions{display:flex;gap:8px;align-items:center}.pill{padding:7px 10px;border-radius:999px;background:#1d2a40;font-size:12px}
-.layout{display:grid;grid-template-columns:240px 1fr;min-height:calc(100vh - 64px)}
-.side{background:#10192a;color:#dbe5f5;padding:14px;position:sticky;top:64px;height:calc(100vh - 64px);overflow:auto}
-.nav{display:grid;gap:7px}.nav button{background:transparent;color:#dbe5f5;text-align:left;padding:12px;border-radius:10px}.nav button:hover,.nav button.active{background:#1d2a40;color:#fff}
-.main{padding:22px;max-width:1500px;width:100%;margin:auto}.page-title{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:18px}
-h1,h2,h3{margin:0 0 8px}.muted{color:var(--muted)}.small{font-size:12px}.grid{display:grid;gap:16px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:17px;box-shadow:var(--shadow)}
-.stat{font-size:27px;font-weight:900}.tag{display:inline-flex;padding:5px 9px;border-radius:999px;background:#eef2f7;font-size:12px;margin:2px}.tag.ok{background:#dff8ed;color:#087a50}.tag.busy{background:#fff0d6;color:#9a5d00}.tag.red{background:#ffe3e6;color:#a51f2c}
-.btn{padding:10px 13px;border-radius:10px;background:#e9eef5;color:var(--ink);font-weight:700}.btn.primary{background:var(--brand);color:#111}.btn.dark{background:var(--dark);color:#fff}.btn.ok{background:var(--ok);color:#fff}.btn.danger{background:var(--danger);color:#fff}.btn.small{padding:7px 9px;font-size:12px}
-input,select,textarea{width:100%;padding:11px 12px;border:1px solid #d9e0ea;border-radius:10px;background:#fff;outline:none}input:focus,select:focus,textarea:focus{border-color:#9aabc3;box-shadow:0 0 0 3px rgba(154,171,195,.15)}
-label{display:block;font-size:12px;font-weight:800;margin:0 0 6px}.field{margin-bottom:12px}.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
-.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap;font-size:13px}
-.banner{border-radius:16px;padding:17px;background:linear-gradient(135deg,#111c2e,#233652);color:#fff}.banner.yellow{background:linear-gradient(135deg,#f5b900,#ffe26a);color:#111}
-.map{height:260px;border-radius:14px;background:#dfe7f0;display:grid;place-items:center;color:#53667f;overflow:hidden}.map iframe{width:100%;height:100%;border:0}
-.login{min-height:100vh;display:grid;place-items:center;padding:20px;background:radial-gradient(circle at top,#263d61,#0b1220 60%);color:#fff}.login-card{width:min(460px,100%);background:#fff;color:var(--ink);border-radius:22px;padding:25px;box-shadow:0 25px 80px rgba(0,0,0,.3)}.role-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:14px 0}.role-tabs button{padding:10px;border-radius:9px;background:#eef2f7}.role-tabs button.sel{background:var(--brand)}
-.kpi{display:flex;justify-content:space-between;align-items:flex-start}.switch{width:64px;height:34px;border-radius:20px;background:#8995a6;padding:4px}.switch i{display:block;width:26px;height:26px;border-radius:50%;background:#fff;transition:.2s}.switch.on{background:var(--ok)}.switch.on i{transform:translateX(30px)}
-.modal{position:fixed;inset:0;background:rgba(4,10,20,.7);display:grid;place-items:center;z-index:100;padding:18px}.modal-card{background:#fff;color:var(--ink);border-radius:18px;padding:20px;width:min(720px,100%);max-height:92vh;overflow:auto}
-#toast{position:fixed;right:16px;bottom:16px;z-index:200;display:grid;gap:8px}.toast{background:#10192a;color:#fff;padding:12px 14px;border-radius:10px;box-shadow:var(--shadow)}
-.chat{display:grid;grid-template-rows:1fr auto;height:330px}.messages{overflow:auto;padding:8px;background:#f7f9fc;border-radius:12px}.msg{max-width:78%;padding:9px 11px;border-radius:12px;margin:5px 0;background:#e9eef5}.msg.me{margin-left:auto;background:#dff8ed}.photo{width:54px;height:54px;border-radius:50%;object-fit:cover;background:#e8edf4}.qr{width:210px;height:210px;display:block;margin:auto}
-@media(max-width:900px){.layout{grid-template-columns:1fr}.side{position:fixed;bottom:0;top:auto;width:100%;height:auto;z-index:30;padding:6px}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap}.main{padding-bottom:90px}.g4,.g3,.g2{grid-template-columns:1fr}.top{position:sticky}}
+:root{--bg:#f4f6fa;--card:#fff;--ink:#111827;--muted:#667085;--line:#e4e7ec;--dark:#101827;--brand:#ffd000;--ok:#17a673;--red:#d92d20;--orange:#f79009;--shadow:0 10px 30px rgba(16,24,40,.08)}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink)}button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}
+.login{min-height:100vh;display:grid;place-items:center;padding:18px;background:radial-gradient(circle at top,#29456b,#101827 65%)}.login-card{width:min(470px,100%);background:#fff;border-radius:24px;padding:26px;box-shadow:0 30px 100px rgba(0,0,0,.3)}.brand{font-size:30px;font-weight:900}.brand b{color:#e5ad00}.roles{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:18px 0}.roles button{border:0;padding:11px;border-radius:10px;background:#edf1f6}.roles .active{background:var(--brand)}
+.field{margin:0 0 12px}.field label{display:block;font-weight:800;font-size:12px;margin-bottom:5px}input,select,textarea{width:100%;border:1px solid #d0d5dd;background:#fff;border-radius:10px;padding:11px 12px;outline:0}textarea{min-height:80px}
+.btn{border:0;padding:10px 13px;border-radius:10px;background:#e9edf2;color:var(--ink);font-weight:800}.btn.primary{background:var(--brand)}.btn.dark{background:var(--dark);color:#fff}.btn.ok{background:var(--ok);color:#fff}.btn.red{background:var(--red);color:#fff}.btn.orange{background:var(--orange);color:#fff}.btn.sm{padding:7px 9px;font-size:12px}
+.app{min-height:100vh}.top{height:64px;background:var(--dark);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;position:sticky;top:0;z-index:20}.top .brand{font-size:21px}.top-right{display:flex;gap:8px;align-items:center}.pill{background:#223149;border-radius:999px;padding:7px 10px;font-size:12px}
+.layout{display:grid;grid-template-columns:240px 1fr}.side{background:#111b2d;color:#dce5f4;min-height:calc(100vh - 64px);position:sticky;top:64px;padding:12px}.nav{display:grid;gap:6px}.nav button{background:transparent;color:inherit;text-align:left;border:0;padding:12px;border-radius:10px}.nav button:hover,.nav button.active{background:#23334c;color:#fff}.main{padding:22px;max-width:1500px;width:100%;margin:auto}
+.title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:17px}.grid{display:grid;gap:14px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:17px;box-shadow:var(--shadow)}.stat{font-size:28px;font-weight:900}.muted{color:var(--muted)}.small{font-size:12px}.tag{display:inline-flex;gap:5px;border-radius:999px;padding:5px 9px;background:#eef2f6;font-size:12px;font-weight:800}.tag.ok{color:#087a50;background:#def7ec}.tag.busy{color:#985b00;background:#fff0d5}.tag.red{color:#a51f2c;background:#ffe4e7}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.service{background:#101c30;color:#fff;border-radius:16px;padding:17px;margin:10px 0}.service.light{background:#fff;color:var(--ink);border:1px solid var(--line)}.map{height:280px;border-radius:14px;background:#e4ebf2;overflow:hidden;display:grid;place-items:center;color:#607088}.map iframe{width:100%;height:100%;border:0}
+.tablewrap{overflow:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap}.avatar{width:48px;height:48px;border-radius:50%;object-fit:cover;background:#e9eef4}.hr{border:0;border-top:1px solid var(--line);margin:17px 0}
+.modal{position:fixed;inset:0;background:rgba(5,12,22,.7);display:grid;place-items:center;padding:18px;z-index:100}.modal-card{background:#fff;border-radius:18px;width:min(780px,100%);max-height:94vh;overflow:auto;padding:20px}.modal-card video{width:100%;border-radius:14px;background:#111}.qr{display:block;width:230px;height:230px;margin:7px auto}
+.chat{display:grid;grid-template-rows:1fr auto;height:350px}.messages{padding:8px;overflow:auto;background:#f8fafc;border-radius:12px}.msg{max-width:78%;padding:9px 11px;border-radius:12px;background:#e7ecf2;margin:5px 0}.msg.me{margin-left:auto;background:#dff7ed}
+#toast{position:fixed;bottom:15px;right:15px;z-index:200;display:grid;gap:8px}.toast{background:#101827;color:#fff;padding:12px 14px;border-radius:10px;box-shadow:var(--shadow)}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.side{position:fixed;top:auto;bottom:0;width:100%;min-height:auto;padding:5px;z-index:30}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap}.main{padding-bottom:90px}.g2,.g3,.g4{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
 <div id="login" class="login">
-  <div class="login-card">
-    <div style="font-size:28px;font-weight:900">Motori<span style="color:#f5b900">Go</span></div>
-    <div class="muted">Conductores · Clientes · Administración</div>
-    <div class="role-tabs">
-      <button data-role="driver" class="sel">Conductor</button>
-      <button data-role="client">Cliente</button>
-      <button data-role="admin">Admin</button>
-    </div>
-    <form id="loginForm">
-      <div class="field"><label id="loginUserLabel">Usuario / celular</label><input id="loginUser" required autocomplete="username"></div>
-      <div class="field"><label>Contraseña</label><input id="loginPass" required inputmode="numeric" maxlength="12" type="password" autocomplete="current-password"></div>
-      <button class="btn primary" style="width:100%">Ingresar</button>
-    </form>
-    <div class="row" style="justify-content:space-between;margin-top:12px">
-      <button class="btn small" onclick="recoverPassword()">Recuperar contraseña</button>
-      <button class="btn small" onclick="registerClient()">Nuevo cliente</button>
-    </div>
-    <div class="card" style="margin-top:15px;background:#f7f9fc">
-      <b>Demo inicial</b>
-      <div class="small muted">Admin: usuario <b>admin</b> · contraseña <b>12</b>. Para producción, cambia estas credenciales y configura RLS.</div>
-    </div>
+ <div class="login-card">
+  <div class="brand">Motori<b>Go</b></div>
+  <div class="muted">Servicios de mototaxi, pasajeros y entregas</div>
+  <div class="roles">
+   <button class="active" data-role="driver">Conductor</button>
+   <button data-role="client">Cliente</button>
+   <button data-role="admin">Admin</button>
   </div>
+  <form id="loginForm">
+   <div class="field"><label id="userLabel">Usuario / celular</label><input id="loginUser" required autocomplete="username"></div>
+   <div class="field"><label>Contraseña</label><input id="loginPass" type="password" inputmode="numeric" maxlength="12" required></div>
+   <button class="btn primary" style="width:100%">Ingresar</button>
+  </form>
+  <div class="row" style="justify-content:space-between;margin-top:11px">
+   <button class="btn sm" onclick="recover()">Recuperar contraseña</button>
+   <button class="btn sm" onclick="registerClient()">Nuevo cliente</button>
+  </div>
+  <div class="card" style="margin-top:15px;background:#f8fafc"><b>Admin inicial</b><div class="small muted">Usuario: <b>admin</b> · Contraseña: <b>12</b></div></div>
+ </div>
 </div>
 
 <div id="app" class="app hidden">
-<header class="top">
-  <div class="logo">Motori<span>Go</span></div>
-  <div class="top-actions"><span id="rolePill" class="pill"></span><span id="userPill" class="pill"></span><button class="btn small" onclick="logout()">Salir</button></div>
-</header>
-<div class="layout">
-<aside class="side"><div class="nav" id="nav"></div></aside>
-<main class="main" id="main"></main>
+<header class="top"><div class="brand">Motori<b>Go</b></div><div class="top-right"><span class="pill" id="rolePill"></span><span class="pill" id="userPill"></span><button class="btn sm" onclick="logout()">Salir</button></div></header>
+<div class="layout"><aside class="side"><div id="nav" class="nav"></div></aside><main id="main" class="main"></main></div>
 </div>
-</div>
-
-<div id="modal" class="modal hidden"><div class="modal-card" id="modalBody"></div></div>
+<div id="modal" class="modal hidden"><div id="modalBody" class="modal-card"></div></div>
 <div id="toast"></div>
 
 <script>
-/* =========================
-   CONFIGURACIÓN
-   ========================= */
-const SUPABASE_URL = "https://njvzlgcsizroyzfojlus.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qdnpsZ2NzaXpyb3l6Zm9qbHVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NzMxNiwiZXhwIjoyMTAzMzUzMzE2fQ.b6aArILZS_aFHgri450Wh0bFH52J5kY3y3cLvUxRAag";
-let sb=null;
-try{ sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}}); }catch(e){console.warn(e)}
+const SUPABASE_URL="https://njvzlgcsizroyzfojlus.supabase.co";
+const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qdnpsZ2NzaXpyb3l6Zm9qbHVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NzMxNiwiZXhwIjoyMTAzMzUzMzE2fQ.b6aArILZS_aFHgri450Wh0bFH52J5kY3y3cLvUxRAag";
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+const FACE_MODELS="https://cdn.jsdelivr.net/gh/vladmandic/face-api/model/";
+let roleSel="driver",session=JSON.parse(localStorage.getItem("mg_session")||"null"),page="home",gpsWatch=null,knownServices=new Set(),alertEnabled=false;
 
-const MODEL_URL="https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights";
-const LS="motorigo_state_v1";
-const SESSION="motorigo_session_v1";
-let state=JSON.parse(localStorage.getItem(LS)||"null")||{
-  drivers:[],clients:[],services:[],fares:[
-    {neighborhood:"Centro",category:"personas",price:7000},
-    {neighborhood:"Chapinero",category:"personas",price:9000},
-    {neighborhood:"Teusaquillo",category:"personas",price:8500},
-    {neighborhood:"Usaquen",category:"personas",price:12000},
-    {neighborhood:"Centro",category:"documentos",price:6000},
-    {neighborhood:"Centro",category:"restaurante",price:6500}
-  ],categories:["personas","documentos","restaurante"],chats:[],admin:{user:"admin",pass:"12"}
-};
-let session=JSON.parse(localStorage.getItem(SESSION)||"null");
-let currentRole="driver", currentPage="home", geoWatch=null, faceReady=false;
+const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=x=>new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0}).format(Number(x)||0);
+const id=()=>crypto.randomUUID?.()||Math.random().toString(36).slice(2);
+const rand4=()=>String(Math.floor(1000+Math.random()*9000));
+const rand3=()=>String(Math.floor(100+Math.random()*900));
+const $=s=>document.querySelector(s);
+function toast(t){let d=document.createElement("div");d.className="toast";d.textContent=t;$("#toast").appendChild(d);setTimeout(()=>d.remove(),3500)}
+function modal(h){$("#modalBody").innerHTML=h;$("#modal").classList.remove("hidden")}
+function closeModal(){stopModalCamera();$("#modal").classList.add("hidden")}
+function current(){if(!session)return{};return session.record||{}}
+function saveSession(r){session.record=r;localStorage.setItem("mg_session",JSON.stringify(session))}
+function logout(){stopGPS();localStorage.removeItem("mg_session");location.reload()}
+function nav(p){page=p;buildNav();render()}
 
-function save(){localStorage.setItem(LS,JSON.stringify(state))}
-function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
-function id(){return Math.random().toString(36).slice(2,10)}
-function money(n){return new Intl.NumberFormat("es-CO",{style:"currency",currency:"COP",maximumFractionDigits:0}).format(Number(n)||0)}
-function toast(msg){const e=document.createElement("div");e.className="toast";e.textContent=msg;document.getElementById("toast").appendChild(e);setTimeout(()=>e.remove(),3500)}
-function modal(html){document.getElementById("modalBody").innerHTML=html;document.getElementById("modal").classList.remove("hidden")}
-function closeModal(){document.getElementById("modal").classList.add("hidden")}
-function rand3(){return String(Math.floor(100+Math.random()*900))}
-function rand4(){return String(Math.floor(1000+Math.random()*9000))}
-function user(){
-  if(!session)return {};
-  if(session.role==="driver") return state.drivers.find(x=>x.id===session.id)||session.record||{};
-  if(session.role==="client") return state.clients.find(x=>x.id===session.id)||session.record||{};
-  return session.record||{};
-}
-function role(){return session?.role}
+document.querySelectorAll(".roles button").forEach(b=>b.onclick=()=>{roleSel=b.dataset.role;document.querySelectorAll(".roles button").forEach(x=>x.classList.toggle("active",x===b));$("#userLabel").textContent=roleSel==="client"?"Documento o correo":roleSel==="admin"?"Usuario admin":"Usuario / celular"});
 
-async function db(table, action, payload, filter){
-  if(!sb)return {data:null,error:new Error("Supabase no disponible")};
-  try{
-    let q=sb.from(table);
-    if(action==="select"){q=q.select("*"); if(filter)q=q.eq(filter[0],filter[1]); return await q;}
-    if(action==="insert")return await q.insert(payload).select();
-    if(action==="update"){q=q.update(payload); if(filter)q=q.eq(filter[0],filter[1]); return await q.select();}
-    if(action==="delete"){q=q.delete(); if(filter)q=q.eq(filter[0],filter[1]); return await q;}
-  }catch(error){return {data:null,error}}
-}
-async function sync(table, rows){ if(!rows?.length)return; try{await sb.from(table).upsert(rows,{onConflict:"id"});}catch(e){console.info("Sincronización opcional:",table,e.message)} }
-
-/* =========================
-   LOGIN
-   ========================= */
-document.querySelectorAll(".role-tabs button").forEach(b=>b.onclick=()=>{
-  currentRole=b.dataset.role;
-  document.querySelectorAll(".role-tabs button").forEach(x=>x.classList.toggle("sel",x===b));
-  document.getElementById("loginUserLabel").textContent=currentRole==="client"?"Documento o correo":currentRole==="admin"?"Usuario admin":"Usuario / celular";
-});
-document.getElementById("loginForm").onsubmit=async e=>{
+$("#loginForm").onsubmit=async e=>{
  e.preventDefault();
- const u=document.getElementById("loginUser").value.trim(), p=document.getElementById("loginPass").value.trim();
- let rec=null;
- if(currentRole==="admin"){if(u===state.admin.user&&p===state.admin.pass)rec={...state.admin,name:"Administrador"}}
- if(currentRole==="driver")rec=state.drivers.find(x=>(x.username===u||x.phone===u)&&x.password===p);
- if(currentRole==="client")rec=state.clients.find(x=>(x.document===u||x.email===u)&&x.password===p);
- if(!rec){toast("Usuario o contraseña incorrectos");return}
- session={role:currentRole,record:rec,id:rec.id||"admin"};
- localStorage.setItem(SESSION,JSON.stringify(session));
+ const u=$("#loginUser").value.trim(),p=$("#loginPass").value.trim(); if(roleSel!=="admin"&&!/^\d{4}$/.test(p)){toast("La contraseña de conductor/cliente debe tener 4 dígitos");return}
+ let q;
+ if(roleSel==="admin")q=await sb.from("profiles").select("*").eq("role","admin").eq("username",u).eq("password_4",p).eq("active",true).maybeSingle();
+ if(roleSel==="driver")q=await sb.from("profiles").select("*,drivers(*)").eq("role","driver").eq("active",true).or(`username.eq.${u},phone.eq.${u}`).eq("password_4",p).maybeSingle();
+ if(roleSel==="client")q=await sb.from("profiles").select("*,clients(*)").eq("role","client").eq("active",true).or(`document_number.eq.${u},email.eq.${u}`).eq("password_4",p).maybeSingle();
+ if(q.error){toast(q.error.message);return}
+ if(!q.data){toast("Usuario o contraseña incorrectos");return}
+ let rec=q.data;
+ if(roleSel==="driver")rec={...rec,...(rec.drivers||{})};
+ if(roleSel==="client")rec={...rec,...(rec.clients||{})};
+ session={role:roleSel,id:rec.id,record:rec};localStorage.setItem("mg_session",JSON.stringify(session));
  openApp();
- if(currentRole==="driver")startDriverGPS();
 };
-function openApp(){
- document.getElementById("login").classList.add("hidden");document.getElementById("app").classList.remove("hidden");
- document.getElementById("rolePill").textContent=role();document.getElementById("userPill").textContent=user().name||user().user||user().username||"usuario";
- buildNav();render();
- if(role()==="driver")checkDailyFace();
-}
-function logout(){stopGPS();session=null;localStorage.removeItem(SESSION);location.reload()}
 
+function openApp(){$("#login").classList.add("hidden");$("#app").classList.remove("hidden");$("#rolePill").textContent=session.role;$("#userPill").textContent=current().full_name||"Usuario";buildNav();render();if(session.role==="driver"){startGPS();checkFaceDaily();subscribeRealtime();}else subscribeRealtime()}
 function buildNav(){
- const common=[["home","Inicio"],["services","Servicios"],["fares","Tarifas"],["chat","Chat admin"],["profile","Perfil"],["history","Historial"]];
- const admin=[["dashboard","Dashboard"],["drivers","Conductores"],["clients","Clientes"],["servicesAdmin","Activar servicios"],["faresAdmin","Tarifas"],["chats","Chats"]];
- const arr=role()==="admin"?admin:common;
- document.getElementById("nav").innerHTML=arr.map(([p,t])=>`<button class="${currentPage===p?"active":""}" onclick="go('${p}')">${t}</button>`).join("");
+ const arr=session.role==="admin"
+ ?[["dashboard","Dashboard"],["drivers","Conductores"],["clients","Clientes"],["servicesAdmin","Servicios"],["faresAdmin","Tarifas"],["chats","Chats"]]
+ :[["home","Inicio"],["services","Servicios"],["fares","Tarifas"],["chat","Chat admin"],["profile","Perfil"],["history","Historial"]];
+ $("#nav").innerHTML=arr.map(([p,t])=>`<button class="${page===p?"active":""}" onclick="nav('${p}')">${t}</button>`).join("");
 }
-function go(p){currentPage=p;buildNav();render()}
+async function render(){if(session.role==="admin")return renderAdmin();if(session.role==="driver")return renderDriver();return renderClient()}
 
-function render(){
- const m=document.getElementById("main");
- if(role()==="admin"){renderAdmin(m);return}
- if(role()==="driver")renderDriver(m);else renderClient(m);
-}
-
-/* =========================
-   CONDUCTOR
-   ========================= */
-function renderDriver(m){
- const d=user();const active=state.services.find(s=>s.driverId===d.id&&["accepted","in_progress"].includes(s.status));
- if(currentPage==="home"){
-  const assigned=state.services.filter(s=>s.driverId===d.id&&["assigned","accepted"].includes(s.status));
-  m.innerHTML=`<div class="page-title"><div><h1>Hola, ${esc(d.name||"conductor")}</h1><div class="muted">Panel de conductor / mototaxi</div></div>
-  <div class="row"><button class="btn" onclick="enableNotifications()">🔔 Activar alertas</button><button class="btn ${d.online?"ok":"dark"}" onclick="toggleOnline()">${d.online?"● ACTIVO":"○ OCUPADO / INACTIVO"}</button></div></div>
-  <div class="grid g4">
-   <div class="card kpi"><div><div class="muted small">Estado</div><div class="stat">${d.online?"Activo":"Inactivo"}</div></div><span class="tag ${d.online?"ok":"red"}">${d.online?"Disponible":"No disponible"}</span></div>
-   <div class="card"><div class="muted small">Servicios activos</div><div class="stat">${assigned.length}</div></div>
-   <div class="card"><div class="muted small">Viajes realizados</div><div class="stat">${state.services.filter(s=>s.driverId===d.id&&s.status==="completed").length}</div></div>
-   <div class="card"><div class="muted small">Ubicación GPS</div><div class="stat">${d.lat?"OK":"—"}</div></div>
-  </div>
-  <div class="card" style="margin-top:16px"><div class="page-title"><h2>Crear servicio individual</h2></div>
-   <form onsubmit="createDriverService(event)" class="grid g3">
-    <div class="field"><label>Categoría</label><select name="category">${state.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div>
-    <div class="field"><label>Nombre / cliente / restaurante</label><input name="customer" required></div>
-    <div class="field"><label>Precio</label><input name="price" type="number" min="0" required></div>
-    <div class="field"><label>Barrio recogida</label><input name="pickupNeighborhood" required></div>
-    <div class="field"><label>Dirección recogida</label><input name="pickupAddress" required></div>
-    <div class="field"><label>Barrio llegada</label><input name="dropNeighborhood"></div>
-    <div class="field"><label>Dirección llegada</label><input name="dropAddress"></div>
-    <div class="field"><label>Propina</label><input name="tip" type="number" min="0" value="0"></div>
-    <div class="field"><label>Parámetros adicionales</label><input name="notes"></div>
-    <div><button class="btn primary">Crear servicio</button></div>
-   </form>
-  </div>
-  <div class="card" style="margin-top:16px"><h2>Servicios disponibles / asignados</h2>${assigned.length?assigned.map(serviceCard).join(""):`<div class="muted">No tienes servicios asignados.</div>`}</div>`;
+/* ========================= DRIVER ========================= */
+async function renderDriver(){
+ const d=current(),m=$("#main");
+ if(page==="home"){
+  const [{data:all},{data:mine}]=await Promise.all([
+    sb.from("services").select("*").in("status",["pending","assigned","accepted","in_progress"]).order("created_at",{ascending:false}),
+    sb.from("services").select("*").eq("driver_id",d.id).in("status",["assigned","accepted","in_progress"]).order("created_at",{ascending:false})
+  ]);
+  const services=[...(mine||[]),...(all||[]).filter(s=>s.status==="pending"&&!s.driver_id)].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i);
+  m.innerHTML=`<div class="title"><div><h1>Hola, ${esc(d.full_name)}</h1><div class="muted">Panel de conductor</div></div><div class="row"><button class="btn" onclick="enableAlerts()">🔔 ${alertEnabled?"Alertas activas":"Activar alertas"}</button><button class="btn ${d.online?"ok":"dark"}" onclick="setOnline(${!d.online})">${d.online?"● ACTIVO":"○ INACTIVO"}</button></div></div>
+  <div class="grid g4"><div class="card"><div class="muted small">Estado</div><div class="stat">${d.online?"Activo":"Inactivo"}</div></div><div class="card"><div class="muted small">Servicios en curso</div><div class="stat">${mine?.length||0}</div></div><div class="card"><div class="muted small">Realizados</div><div class="stat">${(await countDriverCompleted(d.id))}</div></div><div class="card"><div class="muted small">GPS</div><div class="stat">${d.latitude?"OK":"—"}</div></div></div>
+  <div class="card" style="margin-top:16px"><div class="title"><h2>Servicio individual</h2></div><form onsubmit="driverCreateService(event)" class="grid g3">
+   <div class="field"><label>Categoría</label><select name="category" id="driverCat">${await categoryOptions()}</select></div>
+   <div class="field"><label>Cliente / restaurante</label><input name="customer" required></div><div class="field"><label>Precio</label><input name="price" type="number" min="0" required></div>
+   <div class="field"><label>Barrio recogida</label><input name="pickup_neighborhood" required></div><div class="field"><label>Dirección recogida</label><input name="pickup_address" required></div>
+   <div class="field"><label>Barrio llegada</label><input name="dropoff_neighborhood"></div><div class="field"><label>Dirección llegada</label><input name="dropoff_address"></div>
+   <div class="field"><label>Propina</label><input name="tip" type="number" min="0" value="0"></div><div class="field"><label>Notas / parámetros</label><input name="notes"></div>
+   <div><button class="btn primary">Crear servicio</button></div></form></div>
+  <div class="card" style="margin-top:16px"><h2>Disponibles / asignados</h2>${services.length?services.map(driverServiceCard).join(""):"<div class='muted'>No hay servicios.</div>"}</div>`;
   return;
  }
- if(currentPage==="services"){
-   const rows=state.services.filter(s=>s.driverId===d.id&&!["completed","cancelled"].includes(s.status));
-   m.innerHTML=`<div class="page-title"><h1>Servicios</h1><span class="tag">${rows.length} abiertos</span></div>${rows.length?rows.map(serviceCard).join(""):`<div class="card muted">No hay servicios.</div>`}`;
-   return;
+ if(page==="services"){
+  const {data}=await sb.from("services").select("*").eq("driver_id",d.id).in("status",["assigned","accepted","in_progress"]).order("created_at",{ascending:false});
+  const available=d.online?(await sb.from("services").select("*").eq("status","pending").is("driver_id",null).order("created_at",{ascending:false})).data||[]:[];
+  m.innerHTML=`<div class="title"><h1>Servicios</h1></div>${[...(data||[]),...available].map(driverServiceCard).join("")||"<div class='card muted'>No hay servicios.</div>"}`;
+  return;
  }
- if(currentPage==="fares"){m.innerHTML=`<div class="page-title"><h1>Tarifas</h1></div><div class="card"><input placeholder="Filtrar por barrio..." oninput="filterFares(this.value)"><div id="fareList" style="margin-top:12px">${fareRows().join("")}</div></div>`;return}
- if(currentPage==="chat"){m.innerHTML=chatPanel("admin",d.id);return}
- if(currentPage==="profile"){
-  m.innerHTML=`<div class="page-title"><h1>Mi perfil</h1></div><div class="grid g2">
-  <div class="card"><h2>Datos</h2><div class="grid g2">${["name","phone","plate","model","bikeType","document"].map(k=>`<div><div class="muted small">${k}</div><b>${esc(d[k]||"—")}</b></div>`).join("")}</div>
-  <hr><h3>QR de pagos</h3><input id="payQr" type="url" value="${esc(d.paymentQr||"")}" placeholder="URL de QR / billetera"><button class="btn primary" style="margin-top:8px" onclick="savePayQR()">Guardar</button></div>
-  <div class="card"><h2>QR de identificación</h2><canvas id="driverQR" class="qr"></canvas><div class="muted small" style="text-align:center">El cliente puede escanearlo para identificar este perfil.</div><div class="row" style="justify-content:center;margin-top:10px"><b>Código alterno:</b> ${esc(d.profileCode||"—")}</div></div>
-  </div>`;setTimeout(()=>drawQR("driverQR",JSON.stringify({type:"driver",id:d.id,name:d.name,code:d.profileCode})),20);return}
- if(currentPage==="history"){
-  const rows=state.services.filter(s=>s.driverId===d.id&&s.status==="completed");
-  m.innerHTML=`<div class="page-title"><h1>Historial</h1></div><div class="card table-wrap"><table class="table"><thead><tr><th>Fecha</th><th>Categoría</th><th>Cliente</th><th>Valor</th><th>Pago</th></tr></thead><tbody>${rows.map(s=>`<tr><td>${new Date(s.completedAt||s.createdAt).toLocaleString()}</td><td>${esc(s.category)}</td><td>${esc(s.customerName||"")}</td><td>${money(s.total)}</td><td>${esc(s.paymentMethod||"—")}</td></tr>`).join("")||`<tr><td colspan="5">Sin viajes</td></tr>`}</tbody></table></div>`;return}
+ if(page==="fares"){m.innerHTML=`<div class="title"><h1>Tarifas</h1></div><div class="card"><input placeholder="Filtrar por barrio..." oninput="fareFilter(this.value)"><div id="fareList">${await fareRows()}</div></div>`;return}
+ if(page==="profile"){
+  const {data:p}=await sb.from("profiles").select("*").eq("id",d.id).single();saveSession({...d,...p});
+  m.innerHTML=`<div class="title"><h1>Mi perfil</h1></div><div class="grid g2"><div class="card"><h2>${esc(p.full_name)}</h2><div class="grid g2">${["phone","document_number","plate","model","bike_type"].map(k=>`<div><span class="muted small">${esc(k)}</span><br><b>${esc(p[k]||d[k]||"—")}</b></div>`).join("")}</div><hr class="hr"><label>QR para recibir pagos</label><input id="paymentQr" value="${esc(p.payment_qr_url||"")}" placeholder="URL o referencia del QR"><button class="btn primary" style="margin-top:8px" onclick="savePaymentQR()">Guardar</button></div>
+  <div class="card"><h2>QR de identificación</h2><canvas id="myQr" class="qr"></canvas><div class="small muted" style="text-align:center">Código alterno: <b>${esc(p.profile_code||"")}</b></div></div></div>`;
+  QRCode.toCanvas($("#myQr"),JSON.stringify({type:"motorigo-driver",id:d.id,code:p.profile_code}),{width:230,margin:2});return;
+ }
+ if(page==="history"){
+  const {data}=await sb.from("services").select("*").eq("driver_id",d.id).eq("status","completed").order("completed_at",{ascending:false});
+  m.innerHTML=`<div class="title"><h1>Historial</h1></div><div class="card tablewrap"><table class="table"><tr><th>Fecha</th><th>Categoría</th><th>Cliente</th><th>Total</th><th>Pago</th></tr>${(data||[]).map(s=>`<tr><td>${new Date(s.completed_at).toLocaleString()}</td><td>${esc(s.category)}</td><td>${esc(s.customer_name||"")}</td><td>${money(s.total)}</td><td>${esc(s.payment_method||"—")}</td></tr>`).join("")||"<tr><td colspan='5'>Sin registros</td></tr>"}</table></div>`;return}
+ if(page==="chat"){const thread=await getAdminThread(d.id,"driver");m.innerHTML=chatHTML(thread);bindChat(thread);return}
 }
-function serviceCard(s){
- const isRestaurant=s.category==="restaurante";
- return `<div class="banner ${s.status==="in_progress"?"yellow":""}" style="margin:10px 0">
- <div class="page-title"><div><span class="tag">${esc(s.category)}</span><h3>${esc(s.customerName||s.customer||"Cliente")}</h3><div>${esc(s.pickupNeighborhood||"")} · ${esc(s.pickupAddress||"")}</div></div><b>${money(s.total||s.price)}</b></div>
- <div class="grid g2"><div><div>Destino: ${esc(s.dropNeighborhood||"")} · ${esc(s.dropAddress||"")}</div><div>Propina: ${money(s.tip)}</div><div>Estado: <b>${esc(s.status)}</b></div></div>
- <div class="row" style="justify-content:flex-end"><button class="btn primary" onclick="acceptService('${s.id}')">Aceptar</button><button class="btn" onclick="openService('${s.id}')">Ver / chat</button></div></div>
- ${isRestaurant?`<div style="margin-top:10px"><input id="delivery-${s.id}" type="file" accept="image/*"><button class="btn small" onclick="attachDelivery('${s.id}')">Adjuntar foto entrega</button></div>`:""}</div>`;
+async function countDriverCompleted(idv){const q=await sb.from("services").select("*",{count:"exact",head:true}).eq("driver_id",idv).eq("status","completed");return q.count||0}
+function driverServiceCard(s){
+ return `<div class="service ${s.status==="in_progress"?"light":""}"><div class="title"><div><span class="tag">${esc(s.category)}</span><h3>${esc(s.customer_name||"Servicio")}</h3><div>${esc(s.pickup_neighborhood||"")} · ${esc(s.pickup_address||"")} → ${esc(s.dropoff_address||"")}</div></div><b>${money(s.total)}</b></div>
+ <div class="row"><span>Estado: <b>${esc(s.status)}</b></span><span>Propina: ${money(s.tip)}</span>${s.validation_code?`<span class="tag">Código ${esc(s.validation_code)}</span>`:""}</div>
+ <div class="row" style="justify-content:flex-end;margin-top:10px">${s.status==="pending"?`<button class="btn primary" onclick="acceptService('${s.id}')">Aceptar</button>`:""}<button class="btn" onclick="serviceDetail('${s.id}')">Ver servicio / chat</button></div></div>`;
 }
-function acceptService(idv){
- const s=state.services.find(x=>x.id===idv);if(!s)return;
- s.status="in_progress";s.acceptedAt=new Date().toISOString();s.code=rand3();s.driverId=user().id;user().online=false;save();toast("Servicio aceptado. Código de validación: "+s.code);playAlert(true);render();
-}
-function openService(idv){
- const s=state.services.find(x=>x.id===idv);if(!s)return;
- modal(`<h2>Servicio #${esc(s.id)}</h2><div class="grid g2">
- <div><b>Categoría:</b> ${esc(s.category)}<br><b>Cliente:</b> ${esc(s.customerName)}<br><b>Recogida:</b> ${esc(s.pickupAddress)}<br><b>Llegada:</b> ${esc(s.dropAddress)}<br><b>Total:</b> ${money(s.total)}</div>
- <div><b>Código de validación:</b><div class="stat">${esc(s.code||"—")}</div><div class="map" id="serviceMap">GPS del conductor y cliente en tiempo real</div></div></div>
- <hr><h3>Chat privado</h3>${chatPanel("service",s.id)}
- <div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn danger" onclick="finishService('${s.id}',false)">Terminar servicio</button><button class="btn ok" onclick="finishService('${s.id}',true)">Terminar y confirmar pago</button><button class="btn" onclick="closeModal()">Cerrar</button></div>`);
-}
-function finishService(idv,askPay){
- const s=state.services.find(x=>x.id===idv);if(!s)return;
- if(askPay){modal(`<h2>Confirmar servicio</h2><p>Elige el medio de pago recibido. Esta confirmación no realiza ningún cobro.</p><div class="row">${["Efectivo","Nequi","Daviplata","Transferencia","Otro"].map(p=>`<button class="btn primary" onclick="completeService('${s.id}','${p}')">${p}</button>`).join("")}</div>`)}
- else completeService(s.id,"No cobrado");
-}
-function completeService(idv,payment){const s=state.services.find(x=>x.id===idv);s.status="completed";s.paymentMethod=payment;s.completedAt=new Date().toISOString();user().online=true;save();closeModal();toast("Servicio terminado");render()}
-function createDriverService(e){
- e.preventDefault();const f=new FormData(e.target);const s={id:id(),driverId:user().id,customerName:f.get("customer"),category:f.get("category"),price:+f.get("price"),tip:+f.get("tip")||0,total:(+f.get("price")||0)+(+f.get("tip")||0),pickupNeighborhood:f.get("pickupNeighborhood"),pickupAddress:f.get("pickupAddress"),dropNeighborhood:f.get("dropNeighborhood"),dropAddress:f.get("dropAddress"),notes:f.get("notes"),status:"in_progress",createdAt:new Date().toISOString(),code:rand3()};state.services.unshift(s);user().online=false;save();toast("Servicio creado");render()}
-function toggleOnline(){user().online=!user().online;save();render()}
-function savePayQR(){user().paymentQr=document.getElementById("payQr").value;save();toast("QR de pago guardado")}
-function attachDelivery(idv){const f=document.getElementById("delivery-"+idv).files[0];if(!f)return toast("Selecciona una foto");const s=state.services.find(x=>x.id===idv);s.deliveryPhotoName=f.name;s.deliveryPhotoAt=new Date().toISOString();save();toast("Foto de entrega registrada")}
-function fareRows(q=""){return state.fares.filter(x=>!q||x.neighborhood.toLowerCase().includes(q.toLowerCase())).map(x=>`<div class="row" style="justify-content:space-between;padding:10px;border-bottom:1px solid var(--line)"><span><b>${esc(x.neighborhood)}</b> · ${esc(x.category)}</span><b>${money(x.price)}</b></div>`)}
-function filterFares(v){document.getElementById("fareList").innerHTML=fareRows(v).join("")}
+async function acceptService(sid){const d=current();const q=await sb.from("services").update({driver_id:d.id,status:"accepted"}).eq("id",sid).eq("status","pending");if(q.error){toast(q.error.message);return}toast("Servicio aceptado");playAlert();render()}
+async function setOnline(on){const d=current();const status=on?"available":"offline";const q=await sb.from("drivers").update({online:on,status}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,online:on,status});render()}}
+async function driverCreateService(e){e.preventDefault();const f=new FormData(e.target),cat=f.get("category"),price=+f.get("price"),tip=+f.get("tip")||0;const d=current();const payload={driver_id:d.id,category:cat,customer_name:f.get("customer"),pickup_neighborhood:f.get("pickup_neighborhood"),pickup_address:f.get("pickup_address"),dropoff_neighborhood:f.get("dropoff_neighborhood"),dropoff_address:f.get("dropoff_address"),price,tip,notes:f.get("notes"),status:"in_progress",accepted_at:new Date().toISOString(),started_at:new Date().toISOString()};const q=await sb.from("services").insert(payload).select().single();if(q.error)toast(q.error.message);else{await sb.from("drivers").update({online:false,status:"busy",busy:true}).eq("id",d.id);toast("Servicio creado");render()}}
+async function savePaymentQR(){const d=current(),url=$("#paymentQr").value.trim();const q=await sb.from("profiles").update({payment_qr_url:url}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,payment_qr_url:url});toast("QR guardado")}}
+async function categoryOptions(){const {data}=await sb.from("categories").select("id,name").eq("active",true).order("name");return (data||[]).map(x=>`<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("")}
 
-/* =========================
-   CLIENTE
-   ========================= */
-function renderClient(m){
- const c=user();
- if(currentPage==="home"){const active=state.services.find(s=>s.clientId===c.id&&["pending","accepted","in_progress"].includes(s.status));
- m.innerHTML=`<div class="page-title"><div><h1>Hola, ${esc(c.name||"cliente")}</h1><div class="muted">Solicita una moto, mensajería o entrega.</div></div><button class="btn primary" onclick="go('newService')">+ Nuevo servicio</button></div>
- <div class="grid g3"><div class="card"><div class="muted small">Servicios</div><div class="stat">${state.services.filter(s=>s.clientId===c.id).length}</div></div><div class="card"><div class="muted small">En curso</div><div class="stat">${active?1:0}</div></div><div class="card"><div class="muted small">Estado</div><div class="stat">${active?"Activo":"Listo"}</div></div></div>
- ${active?`<div class="card" style="margin-top:16px"><h2>Servicio actual</h2>${clientServiceCard(active)}</div>`:"<div class='card' style='margin-top:16px'><h2>¿Qué necesitas?</h2><p class='muted'>Crea un servicio y espera a que un conductor lo acepte.</p></div>"}`;
- return}
- if(currentPage==="newService"){m.innerHTML=`<div class="page-title"><h1>Nuevo servicio</h1></div><div class="card"><form onsubmit="createClientService(event)" class="grid g2">
- <div class="field"><label>Categoría</label><select name="category" onchange="pricePreview(this.value)">${state.categories.map(x=>`<option>${esc(x)}</option>`).join("")}</select></div>
- <div class="field"><label>Nombre del cliente</label><input name="customer" value="${esc(c.name||"")}" required></div>
- <div class="field"><label>Barrio recogida</label><input name="pickupNeighborhood" list="neighborhoods" required oninput="pricePreview()"><datalist id="neighborhoods">${[...new Set(state.fares.map(x=>x.neighborhood))].map(x=>`<option>${esc(x)}</option>`).join("")}</datalist></div>
- <div class="field"><label>Dirección recogida</label><input name="pickupAddress" required></div>
- <div class="field"><label>Barrio llegada</label><input name="dropNeighborhood"></div><div class="field"><label>Dirección llegada</label><input name="dropAddress"></div>
- <div class="field"><label>Propina</label><input name="tip" type="number" min="0" value="0"></div>
- <div class="field"><label>Notas / parámetros</label><textarea name="notes"></textarea></div>
- <div class="card" style="grid-column:1/-1;background:#fffbe6"><div class="muted">Tarifa estimada</div><div id="priceBox" class="stat">$0</div><div class="small muted">La tarifa se obtiene de la tabla administrada por el admin.</div></div>
- <button class="btn primary">Crear y buscar conductor</button></form></div>`;pricePreview();return}
- if(currentPage==="services"){const rows=state.services.filter(s=>s.clientId===c.id);m.innerHTML=`<div class="page-title"><h1>Mis servicios</h1></div>${rows.map(clientServiceCard).join("")||`<div class="card muted">No tienes servicios.</div>`}`;return}
- if(currentPage==="fares"){m.innerHTML=`<div class="page-title"><h1>Tarifas</h1></div><div class="card"><input placeholder="Filtrar por barrio..." oninput="filterFares(this.value)"><div id="fareList">${fareRows().join("")}</div></div>`;return}
- if(currentPage==="chat"){m.innerHTML=chatPanel("admin",c.id);return}
- if(currentPage==="profile"){m.innerHTML=`<div class="page-title"><h1>Perfil</h1></div><div class="card"><h2>${esc(c.name)}</h2><p>${esc(c.document||c.email||"")}</p><p>${esc(c.phone||"")}</p><p class="muted">Código interno: ${esc(c.profileCode||"")}</p></div>`;return}
- if(currentPage==="history"){const rows=state.services.filter(s=>s.clientId===c.id&&s.status==="completed");m.innerHTML=`<div class="page-title"><h1>Historial</h1></div><div class="card table-wrap"><table class="table"><tr><th>Fecha</th><th>Categoría</th><th>Valor</th><th>Pago</th></tr>${rows.map(s=>`<tr><td>${new Date(s.completedAt).toLocaleString()}</td><td>${esc(s.category)}</td><td>${money(s.total)}</td><td>${esc(s.paymentMethod||"")}</td></tr>`).join("")}</table></div>`;return}
+/* ========================= CLIENT ========================= */
+async function renderClient(){
+ const c=current(),m=$("#main");
+ if(page==="home"){
+  const {data}=await sb.from("services").select("*").eq("client_id",c.id).in("status",["pending","assigned","accepted","in_progress"]).order("created_at",{ascending:false}).limit(1);
+  m.innerHTML=`<div class="title"><div><h1>Hola, ${esc(c.full_name)}</h1><div class="muted">Solicita tu servicio.</div></div><button class="btn primary" onclick="nav('newService')">+ Nuevo servicio</button></div><div class="grid g3"><div class="card"><div class="muted small">Servicios</div><div class="stat">${await clientCount(c.id)}</div></div><div class="card"><div class="muted small">En curso</div><div class="stat">${data?.length||0}</div></div><div class="card"><div class="muted small">Código de cliente</div><div class="stat">${esc(c.profile_code||"")}</div></div></div>${data?.[0]?`<div class="card" style="margin-top:16px"><h2>Servicio actual</h2>${clientServiceCard(data[0])}</div>`:"<div class='card' style='margin-top:16px'><h2>¿Qué necesitas?</h2><div class='muted'>Crea un servicio de personas, documentos o restaurante.</div></div>"}`;return
+ }
+ if(page==="newService"){m.innerHTML=`<div class="title"><h1>Nuevo servicio</h1></div><div class="card"><form onsubmit="createClientService(event)" class="grid g2">
+ <div class="field"><label>Categoría</label><select name="category" onchange="previewFare()">${await categoryOptions()}</select></div>
+ <div class="field"><label>Nombre del cliente</label><input name="customer_name" value="${esc(c.full_name)}" required></div>
+ <div class="field"><label>Barrio de recogida</label><input name="pickup_neighborhood" list="nhoods" required oninput="previewFare()"><datalist id="nhoods">${await neighborhoodOptions()}</datalist></div>
+ <div class="field"><label>Dirección de recogida</label><input name="pickup_address" required></div>
+ <div class="field"><label>Barrio de llegada</label><input name="dropoff_neighborhood"></div>
+ <div class="field"><label>Dirección de llegada</label><input name="dropoff_address"></div>
+ <div class="field"><label>Propina</label><input name="tip" type="number" min="0" value="0" oninput="previewFare()"></div>
+ <div class="field"><label>Notas</label><textarea name="notes"></textarea></div>
+ <div class="card" style="grid-column:1/-1;background:#fffbea"><div class="muted">Tarifa del barrio</div><div id="pricePreview" class="stat">${money(0)}</div></div>
+ <div><button class="btn primary">Crear y buscar conductor</button></div></form></div>`;previewFare();return}
+ if(page==="services"){const {data}=await sb.from("services").select("*").eq("client_id",c.id).order("created_at",{ascending:false});m.innerHTML=`<div class="title"><h1>Mis servicios</h1></div>${(data||[]).map(clientServiceCard).join("")||"<div class='card muted'>Sin servicios.</div>"} `;return}
+ if(page==="fares"){m.innerHTML=`<div class="title"><h1>Tarifas</h1></div><div class="card"><input placeholder="Filtrar por barrio..." oninput="fareFilter(this.value)"><div id="fareList">${await fareRows()}</div></div>`;return}
+ if(page==="profile"){m.innerHTML=`<div class="title"><h1>Perfil</h1></div><div class="card"><h2>${esc(c.full_name)}</h2><p>${esc(c.document_number||c.email||"")}</p><p>${esc(c.phone||"")}</p></div>`;return}
+ if(page==="history"){const {data}=await sb.from("services").select("*").eq("client_id",c.id).eq("status","completed").order("completed_at",{ascending:false});m.innerHTML=`<div class="title"><h1>Historial</h1></div><div class="card tablewrap"><table class="table"><tr><th>Fecha</th><th>Categoría</th><th>Total</th><th>Pago</th></tr>${(data||[]).map(s=>`<tr><td>${new Date(s.completed_at).toLocaleString()}</td><td>${esc(s.category)}</td><td>${money(s.total)}</td><td>${esc(s.payment_method||"—")}</td></tr>`).join("")}</table></div>`;return}
+ if(page==="chat"){const thread=await getAdminThread(c.id,"client");m.innerHTML=chatHTML(thread);bindChat(thread);return}
 }
-function clientServiceCard(s){
- const d=state.drivers.find(x=>x.id===s.driverId);
- return `<div class="banner ${s.status==="in_progress"?"yellow":""}" style="margin:10px 0"><div class="page-title"><div><span class="tag">${esc(s.category)}</span><h3>${esc(s.customerName)}</h3><div>${esc(s.pickupNeighborhood)} · ${esc(s.pickupAddress)} → ${esc(s.dropAddress||"")}</div></div><b>${money(s.total)}</b></div>
- <div>${s.status==="pending"?"Buscando conductor…":`Conductor: ${esc(d?.name||"Asignado")} · ${esc(d?.plate||"")} · Estado: ${esc(s.status)}`}</div>
- ${s.status!=="pending"?`<div class="row" style="margin-top:10px"><b>Código:</b><span class="stat">${esc(s.code||"")}</span><button class="btn" onclick="openService('${s.id}')">Chat / seguimiento</button></div>`:""}
- </div>`;
-}
-function createClientService(e){
- e.preventDefault();const f=new FormData(e.target), cat=f.get("category"), neighborhood=f.get("pickupNeighborhood");const base=getFare(neighborhood,cat);
- if(base===null){toast("No existe una tarifa para ese barrio y categoría");return}
- const s={id:id(),clientId:user().id,customerName:f.get("customer"),category:cat,price:base,tip:+f.get("tip")||0,total:base+(+f.get("tip")||0),pickupNeighborhood:neighborhood,pickupAddress:f.get("pickupAddress"),dropNeighborhood:f.get("dropNeighborhood"),dropAddress:f.get("dropAddress"),notes:f.get("notes"),status:"pending",createdAt:new Date().toISOString()};
- state.services.unshift(s);save();toast("Servicio creado. Buscando conductor…");notifyNewService(s);go("services");
-}
-function getFare(n,c){const x=state.fares.find(f=>f.neighborhood.toLowerCase()===String(n||"").toLowerCase()&&f.category===c);return x?+x.price:null}
-function pricePreview(cat){
- const form=document.querySelector("#main form");if(!form)return;const n=form.querySelector('[name="pickupNeighborhood"]')?.value;const c=form.querySelector('[name="category"]')?.value;const tip=+(form.querySelector('[name="tip"]')?.value||0);const p=getFare(n,c);const box=document.getElementById("priceBox");if(box)box.textContent=money((p||0)+tip)
-}
+async function clientCount(idv){const q=await sb.from("services").select("*",{count:"exact",head:true}).eq("client_id",idv);return q.count||0}
+async function neighborhoodOptions(){const {data}=await sb.from("neighborhoods").select("name").eq("active",true).order("name");return (data||[]).map(x=>`<option>${esc(x.name)}</option>`).join("")}
+async function previewFare(){const form=$("#main form");if(!form)return;const n=form.pickup_neighborhood.value,c=form.category.value,t=+form.tip.value||0;if(!n){$("#pricePreview").textContent=money(t);return}const {data}=await sb.from("fares").select("price").eq("active",true).ilike("neighborhood",n).ilike("category",c).limit(1).maybeSingle();$("#pricePreview").textContent=money((data?.price||0)+t)}
+function clientServiceCard(s){return `<div class="service light"><div class="title"><div><span class="tag">${esc(s.category)}</span><h3>${esc(s.customer_name||"Servicio")}</h3><div>${esc(s.pickup_neighborhood||"")} · ${esc(s.pickup_address||"")} → ${esc(s.dropoff_address||"")}</div></div><b>${money(s.total)}</b></div><div>Estado: <b>${esc(s.status)}</b></div>${s.driver_id?`<div class="row" style="margin-top:8px"><span>Código de validación: <b>${esc(s.validation_code||"")}</b></span><button class="btn" onclick="serviceDetail('${s.id}')">Seguimiento / chat</button></div>`:"<div class='muted' style='margin-top:8px'>Buscando conductor…</div>"}</div>`}
+async function createClientService(e){e.preventDefault();const f=new FormData(e.target),n=f.get("pickup_neighborhood"),c=f.get("category"),tip=+f.get("tip")||0;const {data:fare}=await sb.from("fares").select("price,category_id").eq("active",true).ilike("neighborhood",n).ilike("category",c).limit(1).maybeSingle();if(!fare){toast("No existe una tarifa para ese barrio/categoría");return}const me=current();const payload={client_id:me.id,category:c,category_id:fare.category_id,customer_name:f.get("customer_name"),customer_phone:me.phone,pickup_neighborhood:n,pickup_address:f.get("pickup_address"),dropoff_neighborhood:f.get("dropoff_neighborhood"),dropoff_address:f.get("dropoff_address"),price:+fare.price,tip,notes:f.get("notes"),status:"pending"};const q=await sb.from("services").insert(payload).select().single();if(q.error){toast(q.error.message);return}await ensureServiceThread(q.data.id,me.id,null,null);toast("Servicio creado. Buscando conductor…");startPendingTimer(q.data.id);nav("services")}
 
-/* =========================
-   ADMIN
-   ========================= */
-function renderAdmin(m){
- if(currentPage==="dashboard"){const active=state.drivers.filter(x=>x.online&&!x.busy),busy=state.drivers.filter(x=>x.busy),services=state.services.filter(x=>x.status==="in_progress");
- m.innerHTML=`<div class="page-title"><div><h1>Dashboard</h1><div class="muted">Monitoreo general de conductores y servicios</div></div><button class="btn primary" onclick="go('servicesAdmin')">Activar servicios</button></div>
- <div class="grid g4"><div class="card"><div class="muted">Conductores</div><div class="stat">${state.drivers.length}</div></div><div class="card"><div class="muted">Activos</div><div class="stat">${active.length}</div></div><div class="card"><div class="muted">Ocupados</div><div class="stat">${busy.length}</div></div><div class="card"><div class="muted">Servicios en curso</div><div class="stat">${services.length}</div></div></div>
- <div class="grid g2" style="margin-top:16px"><div class="card"><h2>Conductores</h2>${driverTable()}</div><div class="card"><h2>Mapa / ubicación actual</h2><div class="map" id="adminMap">Los GPS aparecen aquí cuando los conductores comparten ubicación.</div></div></div>`;return}
- if(currentPage==="drivers"){m.innerHTML=`<div class="page-title"><h1>Conductores</h1><button class="btn primary" onclick="newDriver()">+ Crear conductor</button></div><div class="card">${driverTable(true)}</div>`;return}
- if(currentPage==="clients"){m.innerHTML=`<div class="page-title"><h1>Clientes registrados</h1></div><div class="card table-wrap"><table class="table"><tr><th>Cliente</th><th>Documento</th><th>Correo</th><th>Servicios</th><th>Último</th></tr>${state.clients.map(c=>{const ss=state.services.filter(s=>s.clientId===c.id);return `<tr><td>${esc(c.name)}</td><td>${esc(c.document||"")}</td><td>${esc(c.email||"")}</td><td>${ss.length}</td><td>${ss[0]?new Date(ss[0].createdAt).toLocaleString():"—"}</td></tr>`}).join("")}</table></div>`;return}
- if(currentPage==="servicesAdmin"){m.innerHTML=`<div class="page-title"><h1>Activar / asignar servicios</h1><button class="btn primary" onclick="adminCreateService()">+ Crear servicio</button></div><div class="card">${state.services.filter(s=>["pending","assigned","in_progress"].includes(s.status)).map(s=>adminServiceRow(s)).join("")||"<div class='muted'>Sin servicios pendientes.</div>"}</div>`;return}
- if(currentPage==="faresAdmin"){m.innerHTML=`<div class="page-title"><h1>Tarifas</h1></div><div class="grid g2"><div class="card"><h2>Manual</h2><form onsubmit="addFare(event)"><div class="field"><label>Barrio</label><input name="neighborhood" required></div><div class="field"><label>Categoría</label><select name="category">${state.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div><div class="field"><label>Valor</label><input name="price" type="number" required></div><button class="btn primary">Agregar</button></form></div><div class="card"><h2>Importar Excel / CSV</h2><input id="fareFile" type="file" accept=".csv,.xlsx,.xls"><p class="small muted">Para mantener el archivo único, el importador implementado acepta CSV con columnas: barrio,categoria,valor. Para XLSX puede convertirse a CSV antes de cargar.</p><button class="btn" onclick="importCSV()">Importar CSV</button></div></div><div class="card" style="margin-top:16px"><div class="table-wrap"><table class="table"><tr><th>Barrio</th><th>Categoría</th><th>Valor</th><th></th></tr>${state.fares.map((f,i)=>`<tr><td>${esc(f.neighborhood)}</td><td>${esc(f.category)}</td><td>${money(f.price)}</td><td><button class="btn danger small" onclick="deleteFare(${i})">Eliminar</button></td></tr>`).join("")}</table></div></div>`;return}
- if(currentPage==="chats"){m.innerHTML=`<div class="page-title"><h1>Chats</h1></div>${[...new Set(state.chats.map(x=>x.thread))].map(t=>`<div class="card" style="margin:10px 0"><h3>${esc(t)}</h3>${state.chats.filter(x=>x.thread===t).slice(-10).map(x=>`<div class="msg">${esc(x.text)}</div>`).join("")}</div>`).join("")||"<div class='card muted'>Sin chats.</div>"};return}
+/* ========================= ADMIN ========================= */
+async function renderAdmin(){
+ const m=$("#main");
+ if(page==="dashboard"){
+  const {data:ds}=await sb.from("drivers").select("*,profiles:profiles(*)").order("status");const {data:ss}=await sb.from("services").select("*").in("status",["pending","assigned","accepted","in_progress"]);
+  m.innerHTML=`<div class="title"><div><h1>Dashboard</h1><div class="muted">Monitoreo en tiempo real</div></div><button class="btn primary" onclick="nav('servicesAdmin')">Activar / asignar</button></div><div class="grid g4"><div class="card"><div class="muted">Conductores</div><div class="stat">${ds?.length||0}</div></div><div class="card"><div class="muted">Disponibles</div><div class="stat">${(ds||[]).filter(d=>d.status==="available").length}</div></div><div class="card"><div class="muted">Ocupados</div><div class="stat">${(ds||[]).filter(d=>d.status==="busy").length}</div></div><div class="card"><div class="muted">Servicios abiertos</div><div class="stat">${ss?.length||0}</div></div></div><div class="grid g2" style="margin-top:16px"><div class="card"><h2>Conductores</h2>${driverRows(ds||[])}</div><div class="card"><h2>GPS</h2>${driverMap(ds||[])}</div></div>`;return
+ }
+ if(page==="drivers"){const {data}=await sb.from("profiles").select("*,drivers(*)").eq("role","driver").order("created_at",{ascending:false});m.innerHTML=`<div class="title"><h1>Conductores</h1><button class="btn primary" onclick="newDriver()">+ Crear conductor</button></div><div class="card">${driverRows((data||[]).map(x=>({...x,...(x.drivers||{})})),true)}</div>`;return}
+ if(page==="clients"){const {data}=await sb.from("profiles").select("*,clients(*)").eq("role","client").order("created_at",{ascending:false});m.innerHTML=`<div class="title"><h1>Clientes</h1></div><div class="card tablewrap"><table class="table"><tr><th>Nombre</th><th>Documento</th><th>Correo</th><th>Celular</th><th>Servicios</th></tr>${(data||[]).map(c=>`<tr><td>${esc(c.full_name)}</td><td>${esc(c.document_number||"")}</td><td>${esc(c.email||"")}</td><td>${esc(c.phone||"")}</td><td>${esc("ver")}</td></tr>`).join("")}</table></div>`;return}
+ if(page==="servicesAdmin"){const {data}=await sb.from("services").select("*").in("status",["pending","assigned","accepted","in_progress"]).order("created_at",{ascending:false});m.innerHTML=`<div class="title"><h1>Servicios</h1><button class="btn primary" onclick="adminCreateService()">+ Crear servicio</button></div>${(data||[]).map(adminServiceCard).join("")||"<div class='card muted'>No hay servicios.</div>"} `;return}
+ if(page==="faresAdmin"){m.innerHTML=`<div class="title"><h1>Tarifas y categorías</h1><button class="btn" onclick="newCategory()">+ Categoría</button></div><div class="grid g2"><div class="card"><h2>Tarifa manual</h2><form onsubmit="addFare(event)"><div class="field"><label>Barrio</label><input name="neighborhood" required></div><div class="field"><label>Categoría</label><select name="category">${await categoryOptions()}</select></div><div class="field"><label>Valor</label><input name="price" type="number" required></div><button class="btn primary">Guardar tarifa</button></form></div><div class="card"><h2>Importar CSV</h2><input id="csvFile" type="file" accept=".csv"><p class="small muted">Columnas: barrio,categoria,valor. Excel se puede guardar como CSV para cargarlo en este archivo único.</p><button class="btn" onclick="importCSV()">Importar</button></div></div><div class="card" style="margin-top:15px">${await fareRows()}</div>`;return}
+ if(page==="chats"){const {data}=await sb.from("chat_threads").select("*,chat_messages(*)").order("updated_at",{ascending:false});m.innerHTML=`<div class="title"><h1>Chats</h1></div>${(data||[]).map(t=>`<div class="card" style="margin:10px 0"><h3>Hilo ${esc(t.id.slice(0,8))}</h3>${(t.chat_messages||[]).slice(-8).map(x=>`<div class="msg">${esc(x.message||"[adjunto]")}</div>`).join("")}</div>`).join("")||"<div class='card muted'>Sin chats.</div>"}`;return}
 }
-function driverTable(details=false){
- return `<div class="table-wrap"><table class="table"><tr><th>Foto</th><th>Conductor</th><th>Estado</th><th>GPS</th><th>Moto</th><th>Acción</th></tr>${state.drivers.map(d=>`<tr><td><img class="photo" src="${esc(d.photo||"")}" onerror="this.style.visibility='hidden'"></td><td><b>${esc(d.name)}</b><br><span class="small">${esc(d.phone||"")}</span></td><td><span class="tag ${d.busy?"busy":d.online?"ok":"red"}">${d.busy?"Ocupado":d.online?"Activo":"Inactivo"}</span></td><td>${d.lat?`${Number(d.lat).toFixed(5)}, ${Number(d.lng).toFixed(5)}`:"—"}</td><td>${esc(d.bikeType||"")} ${esc(d.plate||"")}</td><td>${details?`<button class="btn small" onclick="inspectDriver('${d.id}')">Ver</button>`:""}</td></tr>`).join("")||`<tr><td colspan="6">No hay conductores.</td></tr>`}</table></div>`;
-}
-function adminServiceRow(s){return `<div class="card" style="margin:10px 0;background:#fafcff"><div class="page-title"><div><b>${esc(s.category)}</b> · ${esc(s.customerName)}</div><span class="tag">${esc(s.status)}</span></div><div>${esc(s.pickupNeighborhood)} · ${esc(s.pickupAddress)} → ${esc(s.dropAddress||"")} · <b>${money(s.total)}</b></div><div class="row" style="margin-top:9px">${state.drivers.filter(d=>d.online&&!d.busy).map(d=>`<button class="btn small" onclick="assignService('${s.id}','${d.id}')">${esc(d.name)}</button>`).join("")||"<span class='muted small'>No hay conductores activos.</span>"}</div></div>`}
-function assignService(sid,did){const s=state.services.find(x=>x.id===sid),d=state.drivers.find(x=>x.id===did);if(!s||!d)return;s.driverId=did;s.status="assigned";d.busy=true;d.online=false;save();notifyNewService(s);toast("Servicio asignado a "+d.name);render()}
-function adminCreateService(){modal(`<h2>Crear servicio administrativo</h2><form onsubmit="adminCreateSubmit(event)" class="grid g2"><div class="field"><label>Categoría</label><select name="category">${state.categories.map(c=>`<option>${esc(c)}</option>`).join("")}</select></div><div class="field"><label>Cliente</label><input name="customer" required></div><div class="field"><label>Barrio recogida</label><input name="pickupNeighborhood" required></div><div class="field"><label>Dirección recogida</label><input name="pickupAddress" required></div><div class="field"><label>Destino</label><input name="dropAddress"></div><div class="field"><label>Valor</label><input name="price" type="number" required></div><button class="btn primary">Crear</button></form>`)}
-function adminCreateSubmit(e){e.preventDefault();const f=new FormData(e.target);state.services.unshift({id:id(),category:f.get("category"),customerName:f.get("customer"),pickupNeighborhood:f.get("pickupNeighborhood"),pickupAddress:f.get("pickupAddress"),dropAddress:f.get("dropAddress"),price:+f.get("price"),total:+f.get("price"),status:"pending",createdAt:new Date().toISOString()});save();closeModal();toast("Servicio creado");render()}
+function driverRows(ds,full=false){return `<div class="tablewrap"><table class="table"><tr><th>Foto</th><th>Conductor</th><th>Estado</th><th>GPS</th><th>Moto</th><th></th></tr>${ds.map(d=>`<tr><td><img class="avatar" src="${esc(d.avatar_url||"")}" onerror="this.style.opacity=.15"></td><td><b>${esc(d.full_name)}</b><br><span class="small">${esc(d.phone||"")}</span></td><td><span class="tag ${d.status==="available"?"ok":d.status==="busy"?"busy":"red"}">${esc(d.status||"offline")}</span></td><td>${d.latitude?`${Number(d.latitude).toFixed(5)}, ${Number(d.longitude).toFixed(5)}`:"—"}</td><td>${esc(d.bike_type||"")} ${esc(d.plate||"")}</td><td>${full?`<button class="btn sm" onclick="inspectDriver('${d.id}')">Ver</button>`:""}</td></tr>`).join("")}</table></div>`}
+function driverMap(ds){const d=ds.find(x=>x.latitude);return d?`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${d.longitude-.015}%2C${d.latitude-.015}%2C${d.longitude+.015}%2C${d.latitude+.015}&layer=mapnik&marker=${d.latitude}%2C${d.longitude}"></iframe>`:"<div>Esperando GPS…</div>"}
+function adminServiceCard(s){return `<div class="card" style="margin:10px 0"><div class="title"><div><span class="tag">${esc(s.category)}</span><h3>${esc(s.customer_name||"Servicio")}</h3><div>${esc(s.pickup_neighborhood||"")} · ${esc(s.pickup_address||"")} → ${esc(s.dropoff_address||"")}</div></div><b>${money(s.total)}</b></div><div>Estado: <b>${esc(s.status)}</b>${s.driver_id?` · Conductor asignado`:""}</div><div class="row" style="margin-top:8px">${!s.driver_id?`<select id="assign-${s.id}"><option value="">Seleccionar conductor disponible</option>${availableDrivers().join("")}</select><button class="btn primary" onclick="assignAdmin('${s.id}')">Asignar</button>`:""}<button class="btn" onclick="serviceDetail('${s.id}')">Detalle</button></div></div>`}
+async function availableDrivers(){const {data}=await sb.from("drivers").select("id,plate").eq("status","available").eq("online",true);return(data||[]).map(d=>`<option value="${d.id}">${esc(d.plate||d.id)}</option>`)}
+async function adminCreateService(){const catopts=await awaitCatOptions();modal(`<h2>Crear servicio admin</h2><form onsubmit="adminSubmit(event)" class="grid g2"><div class="field"><label>Categoría</label><select name="category">${catopts}</select></div><div class="field"><label>Cliente / nombre</label><input name="customer" required></div><div class="field"><label>Barrio recogida</label><input name="neighborhood" required></div><div class="field"><label>Dirección recogida</label><input name="pickup" required></div><div class="field"><label>Destino</label><input name="dropoff"></div><div class="field"><label>Valor</label><input name="price" type="number" required></div><button class="btn primary">Crear</button></form>`)}
+let cachedCats="";
+async function awaitCatOptions(){const {data}=await sb.from("categories").select("name").eq("active",true);return(data||[]).map(x=>`<option>${esc(x.name)}</option>`).join("")}
+async function adminSubmit(e){e.preventDefault();const f=new FormData(e.target);const {data,error}=await sb.from("services").insert({category:f.get("category"),customer_name:f.get("customer"),pickup_neighborhood:f.get("neighborhood"),pickup_address:f.get("pickup"),dropoff_address:f.get("dropoff"),price:+f.get("price"),status:"pending",created_by_admin_id:current().id}).select().single();if(error)toast(error.message);else{closeModal();toast("Servicio creado");render()}}
+async function assignAdmin(sid){const did=$(`#assign-${sid}`).value;if(!did)return toast("Selecciona conductor");const q=await sb.from("services").update({driver_id:did,status:"assigned"}).eq("id",sid);if(q.error)toast(q.error.message);else{await makeNotification(did,sid,"¡Nuevo servicio asignado!","Tienes un nuevo servicio pendiente.");toast("Servicio asignado");render()}}
 function newDriver(){modal(`<h2>Crear conductor</h2><form onsubmit="saveDriver(event)" class="grid g2">
-${["name:Nombres y apellidos","phone:Número celular","plate:Placa moto","model:Modelo","document:Cédula","bikeType:Tipo de moto"].map(x=>{let [n,l]=x.split(":");return `<div class="field"><label>${l}</label><input name="${n}" required></div>`}).join("")}
-<div class="field"><label>Foto del conductor</label><input name="photo" type="file" accept="image/*"></div><div class="field"><label>Licencia de tránsito</label><input name="license" type="file"></div><div class="field"><label>Tarjeta de propiedad</label><input name="property" type="file"></div><div class="field"><label>SOAT</label><input name="soat" type="file"></div><div class="field"><label>Tecnomecánica</label><input name="techno" type="file"></div>
-<button class="btn primary">Crear conductor y generar contraseña</button></form><p class="small muted">La contraseña se genera en la aplicación. El envío real por WhatsApp requiere un proveedor/API de WhatsApp y credenciales de servidor.</p>`)}
-function saveDriver(e){e.preventDefault();const f=new FormData(e.target),d={id:id(),name:f.get("name"),phone:f.get("phone"),username:f.get("phone"),password:rand4(),plate:f.get("plate"),model:f.get("model"),document:f.get("document"),bikeType:f.get("bikeType"),profileCode:rand3(),online:false,busy:false,createdAt:new Date().toISOString(),documents:{license:f.get("license")?.name,property:f.get("property")?.name,soat:f.get("soat")?.name,techno:f.get("techno")?.name}};const photo=f.get("photo");if(photo&&photo.size){const r=new FileReader();r.onload=()=>{d.photo=r.result;state.drivers.push(d);save();showGeneratedCredentials(d)};r.readAsDataURL(photo)}else{state.drivers.push(d);save();showGeneratedCredentials(d)}}
-function showGeneratedCredentials(d){modal(`<h2>Conductor creado</h2><p>Usuario: <b>${esc(d.username)}</b></p><div class="stat" style="text-align:center">${esc(d.password)}</div><p>Guarda esta contraseña. El HTML no puede enviar WhatsApp directamente sin un proveedor/API.</p><button class="btn primary" onclick="closeModal();render()">Cerrar</button>`)}
-function inspectDriver(idv){const d=state.drivers.find(x=>x.id===idv);modal(`<h2>${esc(d.name)}</h2><div class="grid g2"><div><p>Celular: ${esc(d.phone)}</p><p>Placa: ${esc(d.plate)}</p><p>Moto: ${esc(d.model)} · ${esc(d.bikeType)}</p><p>GPS: ${d.lat?d.lat+", "+d.lng:"sin ubicación"}</p></div><div class="map">${d.lat?`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${d.lng-.01}%2C${d.lat-.01}%2C${d.lng+.01}%2C${d.lat+.01}&layer=mapnik&marker=${d.lat}%2C${d.lng}"></iframe>`:"Sin GPS"}</div></div>`)}
-function addFare(e){e.preventDefault();const f=new FormData(e.target);state.fares.push({neighborhood:f.get("neighborhood"),category:f.get("category"),price:+f.get("price")});save();toast("Tarifa agregada");render()}
-function deleteFare(i){state.fares.splice(i,1);save();render()}
-async function importCSV(){const file=document.getElementById("fareFile").files[0];if(!file)return toast("Selecciona un CSV");const text=await file.text();const lines=text.split(/\r?\n/).filter(Boolean);const headers=lines.shift().split(",").map(x=>x.trim().toLowerCase());lines.forEach(line=>{const a=line.split(",");const o={};headers.forEach((h,i)=>o[h]=a[i]?.trim());if(o.barrio&&o.categoria&&o.valor)state.fares.push({neighborhood:o.barrio,category:o.categoria,price:+o.valor})});save();toast("CSV importado");render()}
-
-/* =========================
-   REGISTRO / RECUPERACIÓN
-   ========================= */
-function registerClient(){modal(`<h2>Nuevo cliente</h2><form onsubmit="saveClient(event)" class="grid g2"><div class="field"><label>Nombre completo</label><input name="name" required></div><div class="field"><label>Documento de identidad</label><input name="document"></div><div class="field"><label>Correo</label><input name="email" type="email"></div><div class="field"><label>Celular</label><input name="phone"></div><button class="btn primary">Crear usuario</button></form>`)}
-function saveClient(e){e.preventDefault();const f=new FormData(e.target),pass=rand4(),c={id:id(),name:f.get("name"),document:f.get("document"),email:f.get("email"),phone:f.get("phone"),password:pass,profileCode:rand3(),createdAt:new Date().toISOString()};if(!c.document&&!c.email)return toast("Documento o correo requerido");state.clients.push(c);save();modal(`<h2>Usuario creado</h2><p>Tu contraseña de 4 dígitos es:</p><div class="stat" style="text-align:center">${pass}</div><button class="btn primary" onclick="navigator.clipboard?.writeText('${pass}');closeModal();toast('Contraseña copiada');">Copiar y cerrar</button>`)}
-function recoverPassword(){modal(`<h2>Recuperar contraseña</h2><p>Ingresa tu documento o correo.</p><input id="recoverValue"><button class="btn primary" style="margin-top:10px" onclick="doRecover()">Consultar</button><p class="small muted">Para producción, no se recomienda mostrar contraseñas en texto plano; esta función sigue tu requerimiento y debe protegerse con RLS y políticas de seguridad.</p>`)}
-function doRecover(){const v=document.getElementById("recoverValue").value.trim();let x=[...state.drivers,...state.clients].find(a=>a.document===v||a.email===v||a.phone===v);if(x)modal(`<h2>Contraseña encontrada</h2><div class="stat" style="text-align:center">${esc(x.password)}</div><button class="btn primary" onclick="closeModal()">Cerrar</button>`);else toast("No se encontró el usuario")}
-
-/* =========================
-   CHAT
-   ========================= */
-function chatPanel(type,thread){
- const msgs=state.chats.filter(x=>x.thread===thread);
- return `<div class="chat"><div class="messages" id="msgs-${esc(thread)}">${msgs.map(x=>`<div class="msg ${x.senderId===session.id?"me":""}"><b>${esc(x.sender)}</b><br>${esc(x.text)}</div>`).join("")||"<div class='muted small'>Sin mensajes.</div>"}</div><form onsubmit="sendChat(event,'${esc(thread)}')" class="row"><input name="text" placeholder="Escribe un mensaje…" required><button class="btn primary">Enviar</button></form></div>`;
+${[["full_name","Nombres y apellidos"],["phone","Celular"],["plate","Placa"],["model","Modelo"],["bike_type","Tipo de moto"],["document_number","Cédula"]].map(x=>`<div class="field"><label>${x[1]}</label><input name="${x[0]}" required></div>`).join("")}
+<div class="field"><label>Foto conductor</label><input name="photo" type="file" accept="image/*"></div><div class="field"><label>Licencia tránsito</label><input name="license" type="file"></div><div class="field"><label>Tarjeta propiedad</label><input name="property" type="file"></div><div class="field"><label>Cédula</label><input name="idfile" type="file"></div><div class="field"><label>SOAT</label><input name="soat" type="file"></div><div class="field"><label>Tecnomecánica</label><input name="techno" type="file"></div>
+<button class="btn primary" style="grid-column:1/-1">Crear y generar contraseña</button></form><p class="small muted">La lista incluye Boxer, MRX, XLR, NKD y otros tipos/modelos; puedes escribir cualquier referencia.</p>`)}
+async function saveDriver(e){e.preventDefault();const f=new FormData(e.target),did=id(),pass=rand4();const profile={id:did,role:"driver",full_name:f.get("full_name"),phone:f.get("phone"),document_number:f.get("document_number"),username:f.get("phone"),password_4:pass,profile_code:rand3()};let photoUrl="";const photo=f.get("photo");if(photo?.size)photoUrl=await upload("driver-photos",did,photo);profile.avatar_url=photoUrl||null;let q=await sb.from("profiles").insert(profile);if(q.error){toast(q.error.message);return}q=await sb.from("drivers").insert({id:did,plate:f.get("plate"),model:f.get("model"),bike_type:f.get("bike_type"),approved:false});if(q.error){toast(q.error.message);return}for(const [key,type] of [["license","licencia_transito"],["property","tarjeta_propiedad"],["idfile","cedula"],["soat","soat"],["techno","tecnomecanica"]]){const file=f.get(key);if(file?.size){const url=await upload("driver-documents",`${did}/${type}-${Date.now()}-${file.name}`,file);if(url)await sb.from("driver_documents").insert({driver_id:did,document_type:type,file_url:url})}}showCredentials(profile)}
+function showCredentials(d){
+ const msg=encodeURIComponent(`MotoriGo - Usuario: ${d.username} - Contraseña: ${d.password_4}`);
+ const wa=`https://wa.me/${String(d.phone||"").replace(/\\D/g,"")}?text=${msg}`;
+ modal(`<h2>Conductor creado</h2><p>Usuario: <b>${esc(d.username)}</b></p><div class="stat" style="text-align:center">${esc(d.password_4)}</div><div class="row" style="justify-content:flex-end"><button class="btn" onclick="navigator.clipboard?.writeText('${d.password_4}');toast('Contraseña copiada')">Copiar</button><a class="btn ok" href="${wa}" target="_blank" rel="noopener">Abrir WhatsApp</a><button class="btn primary" onclick="closeModal()">Cerrar</button></div><p class="small muted">WhatsApp se abre con el mensaje preparado; el envío automático requiere una API empresarial con credenciales de servidor.</p>`)
 }
-function sendChat(e,thread){e.preventDefault();const text=new FormData(e.target).get("text");state.chats.push({id:id(),thread,senderId:session.id,sender:user().name||user().user||"usuario",text,createdAt:new Date().toISOString()});save();e.target.reset();if(currentPage==="chat")render();else{const b=document.querySelector(".chat");if(b)openService(thread)}}
-
-/* =========================
-   GPS + NOTIFICACIONES
-   ========================= */
-function startDriverGPS(){
- if(!navigator.geolocation)return;
- stopGPS();
- geoWatch=navigator.geolocation.watchPosition(pos=>{
-  const d=user();d.lat=pos.coords.latitude;d.lng=pos.coords.longitude;d.accuracy=pos.coords.accuracy;d.lastGpsAt=new Date().toISOString();d.online=!!d.online;save();
- },err=>console.log("GPS",err),{enableHighAccuracy:true,maximumAge:5000,timeout:15000});
-}
-function stopGPS(){if(geoWatch!==null){navigator.geolocation.clearWatch(geoWatch);geoWatch=null}}
-async function enableNotifications(){
- if(!("Notification"in window))return toast("Este navegador no soporta notificaciones");
- const p=await Notification.requestPermission();if(p==="granted")toast("Notificaciones activadas");
-}
-function notifyNewService(s){
- if(role()==="driver"&&s.driverId===user().id){
-   if(Notification.permission==="granted")new Notification("¡Nuevo servicio asignado!",{body:`${s.category} · ${money(s.total)} · ${s.pickupAddress||""}`});
-   playAlert(true);
- }
-}
-function playAlert(loud=false){
- try{const ctx=new (window.AudioContext||window.webkitAudioContext)();const gain=ctx.createGain();gain.gain.value=loud?.55:.25;gain.connect(ctx.destination);[880,1320,1760,1320].forEach((hz,i)=>{const o=ctx.createOscillator();o.type="sine";o.frequency.value=hz;o.connect(gain);o.start(ctx.currentTime+i*.16);o.stop(ctx.currentTime+i*.16+.12)});}catch(e){}
-}
-setInterval(()=>{if(role()==="driver"){const s=state.services.find(x=>x.driverId===user().id&&x.status==="assigned");if(s){playAlert();notifyNewService(s)}}},12000);
-
-/* =========================
-   FACE API — 1 VEZ AL DÍA
-   ========================= */
-async function checkDailyFace(){
- const d=user();if(!d)return;
- const day=new Date().toISOString().slice(0,10);
- if(d.lastFaceAuth===day)return;
- modal(`<h2>Verificación facial</h2><p>Por seguridad, el conductor debe autenticarse una vez al día.</p><video id="faceVideo" autoplay playsinline style="width:100%;max-height:350px;background:#111;border-radius:14px"></video><div id="faceStatus" class="muted" style="margin-top:8px">Cargando modelos…</div><div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" onclick="closeModal()">Ahora no</button><button class="btn primary" id="faceBtn" onclick="verifyFace()" disabled>Verificar rostro</button></div>`);
- try{
-   await Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
-   ]);
-   faceReady=true;document.getElementById("faceStatus").textContent="Modelos listos. Permite la cámara y pulsa verificar.";document.getElementById("faceBtn").disabled=false;
-   const stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});document.getElementById("faceVideo").srcObject=stream;
- }catch(e){document.getElementById("faceStatus").textContent="No se pudo iniciar la cámara/modelos: "+e.message}
-}
-async function verifyFace(){
- if(!faceReady)return;
- const v=document.getElementById("faceVideo"),status=document.getElementById("faceStatus");
- status.textContent="Analizando rostro…";
- try{
-   const result=await faceapi.detectSingleFace(v,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
-   if(!result){status.textContent="No se detectó un rostro claro.";return}
-   const desc=Array.from(result.descriptor);
-   const d=user();
-   // Si el conductor ya tiene descriptor, se compara. Si es su primera autenticación,
-   // este flujo permite registrar el descriptor inicial como preregistro.
-   if(d.faceDescriptor?.length){
-     const dist=faceapi.euclideanDistance(new Float32Array(d.faceDescriptor),new Float32Array(desc));
-     if(dist>.58){status.textContent="Rostro no coincide. Distancia: "+dist.toFixed(3);return}
-   }else{
-     d.faceDescriptor=desc;
+function inspectDriver(idv){modal(`<div id="driverInspect">Cargando…</div>`);(async()=>{const {data:p}=await sb.from("profiles").select("*,drivers(*)").eq("id",idv).single();const d={...p,...(p.drivers||{})};$("#driverInspect").innerHTML=`<div class="title"><h2>${esc(d.full_name)}</h2><button class="btn" onclick="closeModal()">Cerrar</button></div><div class="grid g2"><div><p>Celular: ${esc(d.phone)}</p><p>Placa: ${esc(d.plate)}</p><p>Moto: ${esc(d.model)} · ${esc(d.bike_type)}</p><p>Estado: ${esc(d.status)}</p><p>Aprobado: ${d.approved?"Sí":"No"}</p><div class="row"><button class="btn ${d.approved?"red":"ok"}" onclick="toggleApproved('${d.id}',${!d.approved})">${d.approved?"Desaprobar":"Aprobar"}</button><button class="btn primary" onclick="registerFace('${d.id}')">Preregistrar rostro</button></div></div><div class="map">${d.latitude?`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${d.longitude-.01}%2C${d.latitude-.01}%2C${d.longitude+.01}%2C${d.latitude+.01}&layer=mapnik&marker=${d.latitude}%2C${d.longitude}"></iframe>`:"Sin GPS"}</div></div>`})()}
+async function toggleApproved(idv,v){const q=await sb.from("drivers").update({approved:v}).eq("id",idv);if(q.error)toast(q.error.message);else{toast(v?"Conductor aprobado":"Conductor desactivado");closeModal();render()}}
+async function newCategory(){modal(`<h2>Nueva categoría</h2><form onsubmit="saveCategory(event)"><div class="field"><label>Nombre</label><input name="name" required></div><div class="field"><label>Descripción</label><input name="description"></div><label><input name="restaurant" type="checkbox"> Requiere restaurante</label><label><input name="delivery" type="checkbox"> Requiere foto de entrega</label><button class="btn primary" style="margin-top:12px">Guardar</button></form>`)}
+async function saveCategory(e){e.preventDefault();const f=new FormData(e.target);const q=await sb.from("categories").insert({name:f.get("name"),description:f.get("description"),requires_restaurant_name:f.get("restaurant")==="on",requires_delivery_photo:f.get("delivery")==="on"});if(q.error)toast(q.error.message);else{closeModal();toast("Categoría creada");render()}}
+async function addFare(e){e.preventDefault();const f=new FormData(e.target);const n=f.get("neighborhood"),c=f.get("category"),p=+f.get("price");const {data:cat}=await sb.from("categories").select("id").ilike("name",c).limit(1).maybeSingle();const {data:nb}=await sb.from("neighborhoods").select("id").ilike("name",n).limit(1).maybeSingle();let q=await sb.from("fares").upsert({neighborhood:n,category:c,category_id:cat?.id||null,neighborhood_id:nb?.id||null,price:p,active:true},{onConflict:"neighborhood,category"});if(q.error){q=await sb.from("fares").insert({neighborhood:n,category:c,category_id:cat?.id||null,neighborhood_id:nb?.id||null,price:p})}if(q.error)toast(q.error.message);else{toast("Tarifa guardada");render()}}
+async function importCSV(){
+ const file=$("#csvFile").files[0];
+ if(!file)return toast("Selecciona un CSV");
+ const lines=(await file.text()).split(/\r?\n/).filter(Boolean);
+ if(!lines.length)return toast("CSV vacío");
+ const headers=lines.shift().split(",").map(x=>x.trim().toLowerCase());
+ const rows=[];
+ for(const line of lines){
+   const a=line.split(",");
+   const o={}; headers.forEach((h,i)=>o[h]=(a[i]||"").trim());
+   if(o.barrio&&o.categoria&&o.valor){
+     rows.push({neighborhood:o.barrio,category:o.categoria,price:Number(o.valor),active:true});
    }
-   d.lastFaceAuth=new Date().toISOString().slice(0,10);d.faceAuthAt=new Date().toISOString();save();
-   status.textContent="Rostro validado correctamente.";
-   setTimeout(()=>{closeModal();render()},700);
- }catch(e){status.textContent="Error de reconocimiento: "+e.message}
+ }
+ if(!rows.length)return toast("No se encontraron filas válidas. Usa barrio,categoria,valor");
+ const q=await sb.from("fares").upsert(rows,{onConflict:"neighborhood,category"});
+ if(q.error)toast(q.error.message);else toast(`${rows.length} tarifas importadas`);
+ render();
 }
 
-/* =========================
-   QR SIN DEPENDENCIA EXTRA:
-   genera un QR usando un servicio externo de imagen. Para producción se puede
-   sustituir por una librería QR local.
-   ========================= */
-function drawQR(idv,text){const c=document.getElementById(idv);if(!c)return;const img=new Image();img.crossOrigin="anonymous";img.onload=()=>{const x=c.getContext("2d");c.width=210;c.height=210;x.drawImage(img,0,0,210,210)};img.src="https://api.qrserver.com/v1/create-qr-code/?size=420x420&data="+encodeURIComponent(text)}
-
-/* =========================
-   SUPABASE: sincronización opcional.
-   El HTML funciona en modo local si las tablas todavía no existen.
-   ========================= */
-async function trySupabaseSync(){
- if(!sb)return;
- // Se intenta sincronizar sólo si las tablas ya fueron creadas y sus RLS/policies lo permiten.
- await sync("drivers",state.drivers);
- await sync("clients",state.clients);
- await sync("services",state.services);
- await sync("fares",state.fares.map((x,i)=>({...x,id:x.id||"fare-"+i})));
+/* ========================= COMMON SERVICE ========================= */
+async function serviceDetail(sid){
+ const {data:s}=await sb.from("services").select("*").eq("id",sid).single();if(!s)return toast("Servicio no encontrado");
+ const d=s.driver_id?(await sb.from("profiles").select("*,drivers(*)").eq("id",s.driver_id).single()).data:null;
+ const thread=await ensureServiceThread(sid,s.client_id,s.driver_id,null);
+ modal(`<div class="title"><div><span class="tag">${esc(s.category)}</span><h2>${esc(s.customer_name||"Servicio")}</h2></div><button class="btn" onclick="closeModal()">Cerrar</button></div>
+ <div class="grid g2"><div><p><b>Recogida:</b> ${esc(s.pickup_address||"")}</p><p><b>Destino:</b> ${esc(s.dropoff_address||"")}</p><p><b>Total:</b> ${money(s.total)}</p><p><b>Propina:</b> ${money(s.tip)}</p><p><b>Estado:</b> ${esc(s.status)}</p>${s.validation_code?`<p><b>Código:</b> <span class="stat">${esc(s.validation_code)}</span></p>`:""}</div><div class="map">${d?.drivers?.latitude?`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${d.drivers.longitude-.01}%2C${d.drivers.latitude-.01}%2C${d.drivers.longitude+.01}%2C${d.drivers.latitude+.01}&layer=mapnik&marker=${d.drivers.latitude}%2C${d.drivers.longitude}"></iframe>`:"GPS no disponible"}</div></div><hr class="hr"><h3>Chat privado</h3>${chatHTML(thread)}<div id="serviceActions"></div>`);
+ bindChat(thread);renderServiceActions(s)
 }
-async function bootstrap(){
- if(session){openApp();if(role()==="driver")startDriverGPS()}
- else document.getElementById("login").classList.remove("hidden");
- if("Notification"in window && Notification.permission==="default"){}
- // Pedir notificaciones sólo después de una interacción; botón incluido en el perfil/home.
-}
-bootstrap();
+async function renderServiceActions(s){const box=$("#serviceActions");if(!box)return;if(session.role==="driver"&&s.driver_id===session.id&&["accepted","in_progress"].includes(s.status))box.innerHTML=`<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn red" onclick="finish('${s.id}',false)">Terminar servicio</button><button class="btn ok" onclick="finish('${s.id}',true)">Terminar y confirmar pago</button></div>`;if(session.role==="driver"&&s.category==="restaurante"&&s.driver_id===session.id)box.innerHTML+=`<div class="field" style="margin-top:10px"><label>Foto de entrega</label><input id="deliveryFile" type="file" accept="image/*"><button class="btn" onclick="deliveryUpload('${s.id}')">Adjuntar entrega</button></div>`}
+async function finish(sid,withPayment){if(withPayment){modal(`<h2>Confirmar servicio</h2><p>No genera ningún cobro automático.</p><div class="row">${["cash","nequi","daviplata","transfer","other"].map(x=>`<button class="btn primary" onclick="complete('${sid}','${x}')">${x}</button>`).join("")}</div>`)}else complete(sid,"not_charged")}
+async function complete(sid,payment){const q=await sb.from("services").update({status:"completed",payment_method:payment,payment_confirmed:true}).eq("id",sid);if(q.error){toast(q.error.message);return}if(session.role==="driver")await sb.from("drivers").update({busy:false,online:true,status:"available"}).eq("id",session.id);closeModal();toast("Servicio terminado");render()}
+async function deliveryUpload(sid){const file=$("#deliveryFile").files[0];if(!file)return toast("Selecciona una foto");const url=await upload("delivery-photos",`${sid}/${Date.now()}-${file.name}`,file);const q=await sb.from("services").update({delivery_photo_url:url,delivery_photo_uploaded_at:new Date().toISOString()}).eq("id",sid);if(q.error)toast(q.error.message);else toast("Foto de entrega guardada")}
+async function fareRows(){const {data}=await sb.from("fares").select("*").eq("active",true).order("neighborhood");return (data||[]).map(f=>`<div class="row" style="justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)"><span><b>${esc(f.neighborhood)}</b> · ${esc(f.category)}</span><b>${money(f.price)}</b></div>`).join("")||"<div class='muted'>Sin tarifas.</div>"}
+async function fareFilter(q){const {data}=await sb.from("fares").select("*").eq("active",true).ilike("neighborhood",`%${q}%`).order("neighborhood");$("#fareList").innerHTML=(data||[]).map(f=>`<div class="row" style="justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)"><span><b>${esc(f.neighborhood)}</b> · ${esc(f.category)}</span><b>${money(f.price)}</b></div>`).join("")}
 
-/* Botón invisible de ayuda para activar notificaciones desde cualquier pantalla. */
-document.addEventListener("click",e=>{if(e.target.matches("[data-notify]"))enableNotifications()});
+/* ========================= CHAT ========================= */
+async function getAdminThread(subjectId,type){let q=await sb.from("chat_threads").select("*").eq("thread_type",type+"_admin").eq(type==="driver"?"driver_id":"client_id",subjectId).maybeSingle();if(q.data)return q.data;const payload={thread_type:type+"_admin",admin_id:(await sb.from("profiles").select("id").eq("role","admin").limit(1).single()).data.id};payload[type==="driver"?"driver_id":"client_id"]=subjectId;return (await sb.from("chat_threads").insert(payload).select().single()).data}
+async function ensureServiceThread(sid,cid,did,adminid){let q=await sb.from("chat_threads").select("*").eq("service_id",sid).eq("thread_type","service").maybeSingle();if(q.data)return q.data;return (await sb.from("chat_threads").insert({service_id:sid,thread_type:"service",client_id:cid,driver_id:did,admin_id:adminid}).select().single()).data}
+function chatHTML(t){return `<div class="chat"><div id="msgs" class="messages"></div><form id="chatForm" class="row"><input name="message" placeholder="Escribe un mensaje…" required><input name="attachment" type="file" accept="image/*" style="max-width:180px"><button class="btn primary">Enviar</button></form></div>`}
+async function bindChat(t){if(!t)return;await refreshMessages(t.id);$("#chatForm")?.addEventListener("submit",async e=>{e.preventDefault();const f=new FormData(e.target),message=f.get("message"),file=f.get("attachment");let url=null;if(file?.size)url=await upload("chat-attachments",`${t.id}/${Date.now()}-${file.name}`,file);const q=await sb.from("chat_messages").insert({thread_id:t.id,sender_id:session.id,message,attachment_url:url,attachment_type:file?.type||null});if(q.error)toast(q.error.message);else{e.target.reset();refreshMessages(t.id)}})}
+async function refreshMessages(tid){const {data}=await sb.from("chat_messages").select("*").eq("thread_id",tid).order("created_at");const box=$("#msgs");if(box)box.innerHTML=(data||[]).map(x=>`<div class="msg ${x.sender_id===session.id?"me":""}">${esc(x.message||"")}${x.attachment_url?`<br><a href="${esc(x.attachment_url)}" target="_blank">Adjunto</a>`:""}</div>`).join("")}
+async function makeNotification(uid,sid,title,body){return sb.from("notifications").insert({user_id:uid,service_id:sid,title,body,type:"service"})}
+
+/* ========================= GPS / REALTIME / ALERTAS ========================= */
+function startGPS(){stopGPS();if(!navigator.geolocation)return;gpsWatch=navigator.geolocation.watchPosition(async p=>{const d=current();const upd={latitude:p.coords.latitude,longitude:p.coords.longitude,gps_accuracy:p.coords.accuracy,gps_updated_at:new Date().toISOString()};await sb.from("drivers").update(upd).eq("id",d.id);saveSession({...d,...upd});const {data:sv}=await sb.from("services").select("id").eq("driver_id",d.id).in("status",["accepted","in_progress"]).limit(1);if(sv?.[0])await sb.from("service_locations").insert({service_id:sv[0].id,driver_id:d.id,latitude:p.coords.latitude,longitude:p.coords.longitude,accuracy:p.coords.accuracy});},e=>console.log("GPS",e),{enableHighAccuracy:true,maximumAge:3000,timeout:15000})}
+function stopGPS(){if(gpsWatch!==null){navigator.geolocation.clearWatch(gpsWatch);gpsWatch=null}}
+async function enableAlerts(){if(!("Notification"in window))return toast("El navegador no soporta notificaciones");const p=await Notification.requestPermission();if(p==="granted"){alertEnabled=true;playAlert();toast("Alertas activadas")}else toast("Debes permitir notificaciones")}
+function playAlert(){try{const C=new (window.AudioContext||window.webkitAudioContext)(),g=C.createGain();g.gain.value=.65;g.connect(C.destination);[1200,1800,2400,1800].forEach((hz,i)=>{const o=C.createOscillator();o.type="sine";o.frequency.value=hz;o.connect(g);o.start(C.currentTime+i*.13);o.stop(C.currentTime+i*.13+.10)})}catch{}}
+function subscribeRealtime(){sb.channel("motorigo-live").on("postgres_changes",{event:"INSERT",schema:"public",table:"notifications"},p=>{if(p.new.user_id===session.id){if(Notification.permission==="granted")new Notification(p.new.title,{body:p.new.body||""});playAlert();toast(p.new.title);render()}}).on("postgres_changes",{event:"*",schema:"public",table:"services"},p=>{if(p.new?.driver_id===session.id||p.new?.client_id===session.id||session.role==="admin")render()}).subscribe()}
+async function pollAssigned(){if(session?.role!=="driver")return;const {data}=await sb.from("services").select("*").eq("driver_id",session.id).eq("status","assigned");for(const s of data||[]){if(!knownServices.has(s.id)){knownServices.add(s.id);if(Notification.permission==="granted")new Notification("¡Nuevo servicio asignado!",{body:`${s.category} · ${money(s.total)}`});playAlert()}}}
+setInterval(pollAssigned,5000);
+function startPendingTimer(idv){let end=Date.now()+300000;const t=setInterval(async()=>{if(Date.now()>end)return clearInterval(t);const {data}=await sb.from("services").select("status,driver_id").eq("id",idv).single();if(data?.driver_id){clearInterval(t);toast("Un conductor aceptó tu servicio");}} ,4000)}
+
+/* ========================= FACE API ========================= */
+let cameraStream=null;
+function stopModalCamera(){if(cameraStream){cameraStream.getTracks().forEach(x=>x.stop());cameraStream=null}}
+async function loadFaceModels(){await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS),faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS),faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS)])}
+async function checkFaceDaily(){const d=current();if(!d.approved){toast("Tu cuenta aún no ha sido aprobada por el administrador.");return}const day=new Date().toISOString().slice(0,10);if(d.last_face_auth_at?.slice(0,10)===day)return;modal(`<h2>Autenticación facial diaria</h2><p>Debes verificar tu rostro una vez al día antes de operar.</p><video id="faceVideo" autoplay playsinline></video><div id="faceMsg" class="muted">Cargando modelos…</div><div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn primary" id="faceVerify" disabled onclick="verifyFace()">Verificar</button></div>`);try{await loadFaceModels();cameraStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});$("#faceVideo").srcObject=cameraStream;$("#faceMsg").textContent="Cámara lista.";$("#faceVerify").disabled=false}catch(e){$("#faceMsg").textContent="No se pudo iniciar: "+e.message}}
+async function verifyFace(){const d=current(),v=$("#faceVideo");try{const r=await faceapi.detectSingleFace(v,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();if(!r){$("#faceMsg").textContent="No se detectó un rostro.";return}const desc=Array.from(r.descriptor);let distance=null;if(d.face_descriptor?.length){distance=faceapi.euclideanDistance(new Float32Array(d.face_descriptor),new Float32Array(desc));if(distance>.58){await sb.from("face_auth_logs").insert({driver_id:d.id,success:false,distance,device_info:navigator.userAgent});$("#faceMsg").textContent=`Rostro no coincide (${distance.toFixed(3)}).`;return}}else{$("#faceMsg").textContent="No existe preregistro facial. Solicita al administrador que registre tu rostro.";return}const now=new Date().toISOString();await sb.from("drivers").update({last_face_auth_at:now}).eq("id",d.id);await sb.from("face_auth_logs").insert({driver_id:d.id,success:true,distance,device_info:navigator.userAgent});saveSession({...d,last_face_auth_at:now});$("#faceMsg").textContent="Rostro validado.";setTimeout(closeModal,700)}catch(e){$("#faceMsg").textContent=e.message}}
+async function registerFace(idv){modal(`<h2>Preregistro facial</h2><p>Ubica el rostro del conductor frente a la cámara.</p><video id="regFaceVideo" autoplay playsinline></video><div id="regMsg">Cargando…</div><div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn primary" id="regBtn" disabled onclick="captureFace('${idv}')">Registrar rostro</button></div>`);try{await loadFaceModels();cameraStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});$("#regFaceVideo").srcObject=cameraStream;$("#regBtn").disabled=false;$("#regMsg").textContent="Cámara lista."}catch(e){$("#regMsg").textContent=e.message}}
+async function captureFace(idv){const v=$("#regFaceVideo");const r=await faceapi.detectSingleFace(v,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();if(!r)return $("#regMsg").textContent="No se detectó rostro.";const q=await sb.from("drivers").update({face_descriptor:Array.from(r.descriptor)}).eq("id",idv);if(q.error)$("#regMsg").textContent=q.error.message;else{toast("Preregistro facial guardado");closeModal()}}
+
+/* ========================= UTILIDADES ========================= */
+async function upload(bucket,path,file){const q=await sb.storage.from(bucket).upload(path,file,{upsert:true});if(q.error){toast(q.error.message);return null}const {data}=sb.storage.from(bucket).getPublicUrl(path);return data?.publicUrl||null}
+function profileForSession(){return current()}
+async function recover(){modal(`<h2>Recuperar contraseña</h2><div class="field"><label>Cédula / correo / celular</label><input id="recoverInput"></div><button class="btn primary" onclick="doRecover()">Consultar</button><p class="small muted">Esta función muestra el PIN de 4 dígitos por el requisito del prototipo. En producción debe migrarse a un flujo seguro de recuperación.</p>`)}
+async function doRecover(){const v=$("#recoverInput").value.trim();const q=await sb.from("profiles").select("password_4,full_name,role").or(`document_number.eq.${v},email.eq.${v},phone.eq.${v}`).limit(1).maybeSingle();if(q.data)modal(`<h2>Contraseña encontrada</h2><p>${esc(q.data.full_name)}</p><div class="stat" style="text-align:center">${esc(q.data.password_4)}</div><button class="btn primary" onclick="navigator.clipboard?.writeText('${q.data.password_4}');closeModal()">Copiar y cerrar</button>`);else toast("No se encontró el usuario")}
+function registerClient(){modal(`<h2>Nuevo cliente</h2><form onsubmit="saveClient(event)" class="grid g2"><div class="field"><label>Nombre</label><input name="name" required></div><div class="field"><label>Documento</label><input name="document"></div><div class="field"><label>Correo</label><input name="email" type="email"></div><div class="field"><label>Celular</label><input name="phone"></div><button class="btn primary">Crear usuario</button></form>`)}
+async function saveClient(e){e.preventDefault();const f=new FormData(e.target),idv=id(),pass=rand4();if(!f.get("document")&&!f.get("email"))return toast("Documento o correo requerido");const p={id:idv,role:"client",full_name:f.get("name"),document_number:f.get("document")||null,email:f.get("email")||null,phone:f.get("phone")||null,password_4:pass,profile_code:rand3()};let q=await sb.from("profiles").insert(p);if(q.error)return toast(q.error.message);q=await sb.from("clients").insert({id:idv});if(q.error)return toast(q.error.message);modal(`<h2>Usuario creado</h2><p>Tu contraseña de 4 dígitos:</p><div class="stat" style="text-align:center">${pass}</div><button class="btn primary" onclick="navigator.clipboard?.writeText('${pass}');closeModal()">Copiar y cerrar</button>`)}
+async function start(){if(session){const q=await sb.from("profiles").select("*,drivers(*),clients(*)").eq("id",session.id).single();if(q.data){let r=q.data;if(session.role==="driver")r={...r,...(r.drivers||{})};if(session.role==="client")r={...r,...(r.clients||{})};session.record=r;localStorage.setItem("mg_session",JSON.stringify(session));openApp();return}}$("#login").classList.remove("hidden")}
+start();
 </script>
 </body>
 </html>
