@@ -1,10 +1,10 @@
-<!doctype html>
+ <!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101827">
-<title>MotoriGo</title>
+<title>MotoriGo | Mototaxi y Servicios</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
@@ -25,6 +25,15 @@
 #toast{position:fixed;bottom:15px;right:15px;z-index:200;display:grid;gap:8px}.toast{background:#101827;color:#fff;padding:12px 14px;border-radius:10px;box-shadow:var(--shadow)}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.side{position:fixed;top:auto;bottom:0;width:100%;min-height:auto;padding:5px;z-index:30}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap}.main{padding-bottom:90px}.g2,.g3,.g4{grid-template-columns:1fr}}
 </style>
+
+<script>
+window.addEventListener("error", function(ev){
+  if (ev.message && /supabase|face-api|QRCode/i.test(ev.message)) {
+    console.error("MotoriGo:", ev.message);
+  }
+});
+</script>
+
 </head>
 <body>
 <div id="login" class="login">
