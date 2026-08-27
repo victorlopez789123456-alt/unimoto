@@ -8,6 +8,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 :root{--bg:#f4f6fa;--card:#fff;--ink:#111827;--muted:#667085;--line:#e4e7ec;--dark:#101827;--brand:#ffd000;--ok:#17a673;--red:#d92d20;--orange:#f79009;--shadow:0 10px 30px rgba(16,24,40,.08)}
 *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--ink)}button,input,select,textarea{font:inherit}button{cursor:pointer}.hidden{display:none!important}
@@ -18,7 +20,9 @@
 .layout{display:grid;grid-template-columns:240px 1fr}.side{background:#111b2d;color:#dce5f4;min-height:calc(100vh - 64px);position:sticky;top:64px;padding:12px}.nav{display:grid;gap:6px}.nav button{background:transparent;color:inherit;text-align:left;border:0;padding:12px;border-radius:10px}.nav button:hover,.nav button.active{background:#23334c;color:#fff}.main{padding:22px;max-width:1500px;width:100%;margin:auto}
 .title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:17px}.grid{display:grid;gap:14px}.g2{grid-template-columns:repeat(2,minmax(0,1fr))}.g3{grid-template-columns:repeat(3,minmax(0,1fr))}.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:17px;box-shadow:var(--shadow)}.stat{font-size:28px;font-weight:900}.muted{color:var(--muted)}.small{font-size:12px}.tag{display:inline-flex;gap:5px;border-radius:999px;padding:5px 9px;background:#eef2f6;font-size:12px;font-weight:800}.tag.ok{color:#087a50;background:#def7ec}.tag.busy{color:#985b00;background:#fff0d5}.tag.red{color:#a51f2c;background:#ffe4e7}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.service{background:#101c30;color:#fff;border-radius:16px;padding:17px;margin:10px 0}.service.light{background:#fff;color:var(--ink);border:1px solid var(--line)}.map{height:280px;border-radius:14px;background:#e4ebf2;overflow:hidden;display:grid;place-items:center;color:#607088}.map iframe{width:100%;height:100%;border:0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.service{background:#101c30;color:#fff;border-radius:16px;padding:17px;margin:10px 0}.service.light{background:#fff;color:var(--ink);border:1px solid var(--line)}.map{height:280px;border-radius:14px;background:#e4ebf2;overflow:hidden;display:grid;place-items:center;color:#607088}.map iframe{width:100%;height:100%;border:0}.map .leaflet-container{width:100%;height:100%;background:#e4ebf2;font-family:inherit}
+.driver-marker{font-size:26px;line-height:32px;text-align:center;filter:drop-shadow(0 3px 4px rgba(0,0,0,.35));transform-origin:50% 50%;transition:transform .3s ease}
+.client-marker{font-size:20px;line-height:26px;text-align:center;filter:drop-shadow(0 2px 3px rgba(0,0,0,.3))}
 .tablewrap{overflow:auto}.table{width:100%;border-collapse:collapse}.table th,.table td{padding:9px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;white-space:nowrap}.avatar{width:48px;height:48px;border-radius:50%;object-fit:cover;background:#e9eef4}.hr{border:0;border-top:1px solid var(--line);margin:17px 0}
 .modal{position:fixed;inset:0;background:rgba(5,12,22,.7);display:grid;place-items:center;padding:18px;z-index:100}.modal-card{background:#fff;border-radius:18px;width:min(780px,100%);max-height:94vh;overflow:auto;padding:20px}.modal-card video{width:100%;border-radius:14px;background:#111}.qr{display:block;width:230px;height:230px;margin:7px auto}
 .chat{display:grid;grid-template-rows:1fr auto;height:350px}.messages{padding:8px;overflow:auto;background:#f8fafc;border-radius:12px}.msg{max-width:78%;padding:9px 11px;border-radius:12px;background:#e7ecf2;margin:5px 0}.msg.me{margin-left:auto;background:#dff7ed}
@@ -294,8 +298,63 @@ async function importCSV(){
 /* ========================= COMMON SERVICE ========================= */
 let trackingChannel=null,trackingLastUpdate=null,trackingClientCoords=null,trackingTimerId=null;
 function haversineKm(lat1,lon1,lat2,lon2){const R=6371,toRad=x=>x*Math.PI/180;const dLat=toRad(lat2-lat1),dLon=toRad(lon2-lon1);const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))}
-function unsubscribeServiceLocation(){if(trackingChannel){sb.removeChannel(trackingChannel);trackingChannel=null}if(trackingTimerId){clearInterval(trackingTimerId);trackingTimerId=null}}
-function updateTrackingMap(lat,lon){const box=$("#trackingMap");if(!box)return;box.innerHTML=`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${lon-.01}%2C${lat-.01}%2C${lon+.01}%2C${lat+.01}&layer=mapnik&marker=${lat}%2C${lon}"></iframe>`;trackingLastUpdate=Date.now();updateTrackingInfo(lat,lon)}
+
+/* ---- Mapa Leaflet con marcador animado (reemplaza el iframe estático) ---- */
+let trackingLeafletMap=null,trackingMarker=null,trackingClientMarker=null;
+let trackingAnimFrame=null,trackingAnimStart=null,trackingFromPos=null,trackingToPos=null;
+const TRACKING_ANIM_MS=2600; // debe ser un poco menor al intervalo real de envío de GPS
+
+function destroyTrackingMap(){
+ if(trackingAnimFrame)cancelAnimationFrame(trackingAnimFrame);
+ trackingAnimFrame=null;trackingAnimStart=null;trackingFromPos=null;trackingToPos=null;
+ if(trackingLeafletMap){trackingLeafletMap.remove();trackingLeafletMap=null}
+ trackingMarker=null;trackingClientMarker=null;
+}
+function bearingDeg(from,to){const toRad=d=>d*Math.PI/180,toDeg=r=>r*180/Math.PI;const dLon=toRad(to[1]-from[1]);const y=Math.sin(dLon)*Math.cos(toRad(to[0]));const x=Math.cos(toRad(from[0]))*Math.sin(toRad(to[0]))-Math.sin(toRad(from[0]))*Math.cos(toRad(to[0]))*Math.cos(dLon);return(toDeg(Math.atan2(y,x))+360)%360}
+function ensureTrackingMap(lat,lon){
+ const box=$("#trackingMap");if(!box)return null;
+ if(!trackingLeafletMap){
+  box.innerHTML="";
+  trackingLeafletMap=L.map(box,{zoomControl:false,attributionControl:false}).setView([lat,lon],16);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,subdomains:"abc"}).addTo(trackingLeafletMap);
+  L.control.zoom({position:"bottomright"}).addTo(trackingLeafletMap);
+  trackingMarker=L.marker([lat,lon],{icon:L.divIcon({className:"driver-marker",html:"🛵",iconSize:[32,32],iconAnchor:[16,16]}),zIndexOffset:500}).addTo(trackingLeafletMap);
+  if(trackingClientCoords)trackingClientMarker=L.marker([trackingClientCoords.lat,trackingClientCoords.lon],{icon:L.divIcon({className:"client-marker",html:"📍",iconSize:[24,24],iconAnchor:[12,24]})}).addTo(trackingLeafletMap);
+  trackingFromPos=[lat,lon];
+ }
+ return trackingLeafletMap;
+}
+function animateMarkerTo(lat,lon){
+ if(!trackingMarker)return;
+ if(!trackingFromPos){trackingFromPos=[lat,lon];trackingMarker.setLatLng([lat,lon]);return}
+ trackingToPos=[lat,lon];trackingAnimStart=null;
+ if(trackingAnimFrame)cancelAnimationFrame(trackingAnimFrame);
+ const startPos=trackingFromPos;
+ const dist=haversineKm(startPos[0],startPos[1],trackingToPos[0],trackingToPos[1]);
+ const brng=dist>0.003?bearingDeg(startPos,trackingToPos):null; // ignora ruido GPS < 3m
+ const el=trackingMarker.getElement();
+ if(el&&brng!=null){const icon=el.querySelector("div")||el;icon.style.display="inline-block";icon.style.transform=`rotate(${brng}deg)`}
+ function step(ts){
+  if(!trackingAnimStart)trackingAnimStart=ts;
+  const t=Math.min((ts-trackingAnimStart)/TRACKING_ANIM_MS,1);
+  const e=t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2; // easeInOutQuad
+  const curLat=startPos[0]+(trackingToPos[0]-startPos[0])*e;
+  const curLon=startPos[1]+(trackingToPos[1]-startPos[1])*e;
+  trackingMarker.setLatLng([curLat,curLon]);
+  if(trackingLeafletMap&&!trackingLeafletMap._dragging)trackingLeafletMap.panTo([curLat,curLon],{animate:false});
+  if(t<1)trackingAnimFrame=requestAnimationFrame(step);
+  else{trackingFromPos=trackingToPos;trackingAnimFrame=null}
+ }
+ trackingAnimFrame=requestAnimationFrame(step);
+}
+function unsubscribeServiceLocation(){if(trackingChannel){sb.removeChannel(trackingChannel);trackingChannel=null}if(trackingTimerId){clearInterval(trackingTimerId);trackingTimerId=null}destroyTrackingMap()}
+function updateTrackingMap(lat,lon){
+ if(lat==null||lon==null)return;
+ const box=$("#trackingMap");if(!box)return;
+ if(typeof L==="undefined"){box.innerHTML=`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${lon-.01}%2C${lat-.01}%2C${lon+.01}%2C${lat+.01}&layer=mapnik&marker=${lat}%2C${lon}"></iframe>`}
+ else{ensureTrackingMap(lat,lon);animateMarkerTo(lat,lon)}
+ trackingLastUpdate=Date.now();updateTrackingInfo(lat,lon)
+}
 function updateTrackingInfo(lat,lon){const info=$("#trackingInfo");if(!info)return;const secs=trackingLastUpdate?Math.max(0,Math.round((Date.now()-trackingLastUpdate)/1000)):null;const distTxt=(trackingClientCoords&&lat!=null)?`Conductor a ${haversineKm(trackingClientCoords.lat,trackingClientCoords.lon,lat,lon).toFixed(2)} km`:"";info.textContent=[distTxt,secs!==null?`Actualizado hace ${secs}s`:""].filter(Boolean).join(" · ")}
 function subscribeServiceLocation(sid,clientLat,clientLon){unsubscribeServiceLocation();if(clientLat!=null&&clientLon!=null)trackingClientCoords={lat:clientLat,lon:clientLon};trackingChannel=sb.channel(`service-location-${sid}`).on("postgres_changes",{event:"INSERT",schema:"public",table:"service_locations",filter:`service_id=eq.${sid}`},payload=>{updateTrackingMap(payload.new.latitude,payload.new.longitude)}).subscribe();trackingTimerId=setInterval(()=>updateTrackingInfo(),3000)}
 async function serviceDetail(sid){
@@ -305,11 +364,12 @@ async function serviceDetail(sid){
  const dv=d?{...d,...(d.drivers||{})}:null;
  const codeLine=session.role==="driver"&&s.driver_verification_code&&!s.driver_verified?`<p><b>Código secreto para el cliente:</b> <span class="stat">${esc(s.driver_verification_code)}</span></p>`:"";
  modal(`<div class="title"><div><span class="tag">${esc(s.category)}</span><h2>${esc(s.customer_name||"Servicio")}</h2></div><button class="btn" onclick="closeModal()">Cerrar</button></div>
- <div class="grid g2"><div><p><b>Recogida:</b> ${esc(s.pickup_address||"")}</p><p><b>Destino:</b> ${esc(s.dropoff_address||"")}</p><p><b>Total:</b> ${money(s.total)}</p><p><b>Propina:</b> ${money(s.tip)}</p><p><b>Estado:</b> ${esc(s.status)}</p>${dv?`<p><b>Conductor:</b> ${esc(dv.full_name)} · ${esc(dv.model||"")} ${esc(dv.plate||"")}</p>`:""}${codeLine}${session.role==="client"&&s.driver_id&&!s.driver_verified?`<button class="btn primary" onclick="openVerifyDriver('${s.id}')">Verificar conductor</button>`:""}</div><div><div class="map" id="trackingMap">${dv?.latitude?`<iframe src="https://www.openstreetmap.org/export/embed.html?bbox=${dv.longitude-.01}%2C${dv.latitude-.01}%2C${dv.longitude+.01}%2C${dv.latitude+.01}&layer=mapnik&marker=${dv.latitude}%2C${dv.longitude}"></iframe>`:"GPS no disponible"}</div><div id="trackingInfo" class="small muted" style="text-align:center;margin-top:6px"></div></div></div><hr class="hr"><h3>Chat privado</h3>${chatHTML(thread)}<div id="serviceActions"></div>`);
+ <div class="grid g2"><div><p><b>Recogida:</b> ${esc(s.pickup_address||"")}</p><p><b>Destino:</b> ${esc(s.dropoff_address||"")}</p><p><b>Total:</b> ${money(s.total)}</p><p><b>Propina:</b> ${money(s.tip)}</p><p><b>Estado:</b> ${esc(s.status)}</p>${dv?`<p><b>Conductor:</b> ${esc(dv.full_name)} · ${esc(dv.model||"")} ${esc(dv.plate||"")}</p>`:""}${codeLine}${session.role==="client"&&s.driver_id&&!s.driver_verified?`<button class="btn primary" onclick="openVerifyDriver('${s.id}')">Verificar conductor</button>`:""}</div><div><div class="map" id="trackingMap">${dv?.latitude?"":"GPS no disponible"}</div><div id="trackingInfo" class="small muted" style="text-align:center;margin-top:6px"></div></div></div><hr class="hr"><h3>Chat privado</h3>${chatHTML(thread)}<div id="serviceActions"></div>`);
  bindChat(thread);renderServiceActions(s);
  if(["accepted","in_progress"].includes(s.status)){
   const clientPos=session.role==="client"?await getCurrentPosition():null;
   subscribeServiceLocation(sid,clientPos?.coords.latitude,clientPos?.coords.longitude);
+  if(dv?.latitude)updateTrackingMap(dv.latitude,dv.longitude);
  }
 }
 async function renderServiceActions(s){const box=$("#serviceActions");if(!box)return;if(session.role==="driver"&&s.driver_id===session.id&&["accepted","in_progress"].includes(s.status))box.innerHTML=`<div class="row" style="justify-content:flex-end;margin-top:12px"><button class="btn red" onclick="finish('${s.id}',false)">Terminar servicio</button><button class="btn ok" onclick="finish('${s.id}',true)">Terminar y confirmar pago</button></div>`;if(session.role==="driver"&&s.category==="restaurante"&&s.driver_id===session.id)box.innerHTML+=`<div class="field" style="margin-top:10px"><label>Foto de entrega</label><input id="deliveryFile" type="file" accept="image/*"><button class="btn" onclick="deliveryUpload('${s.id}')">Adjuntar entrega</button></div>`}
