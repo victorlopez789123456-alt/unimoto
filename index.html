@@ -1,10 +1,10 @@
- <!doctype html>
+<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101827">
-<title>MotoriGo | Mototaxi y Servicios</title>
+<title>MotoriGo</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
@@ -25,15 +25,6 @@
 #toast{position:fixed;bottom:15px;right:15px;z-index:200;display:grid;gap:8px}.toast{background:#101827;color:#fff;padding:12px 14px;border-radius:10px;box-shadow:var(--shadow)}
 @media(max-width:900px){.layout{grid-template-columns:1fr}.side{position:fixed;top:auto;bottom:0;width:100%;min-height:auto;padding:5px;z-index:30}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap}.main{padding-bottom:90px}.g2,.g3,.g4{grid-template-columns:1fr}}
 </style>
-
-<script>
-window.addEventListener("error", function(ev){
-  if (ev.message && /supabase|face-api|QRCode/i.test(ev.message)) {
-    console.error("MotoriGo:", ev.message);
-  }
-});
-</script>
-
 </head>
 <body>
 <div id="login" class="login">
@@ -55,6 +46,8 @@ window.addEventListener("error", function(ev){
    <button class="btn sm" onclick="registerClient()">Nuevo cliente</button>
   </div>
   <div class="card" style="margin-top:15px;background:#f8fafc"><b>Admin inicial</b><div class="small muted">Usuario: <b>admin</b> · Contraseña: <b>12</b></div></div>
+  <div class="small" style="margin-top:10px;color:#667085">URL: <b>njvzlgcsizroyzfojlus.supabase.co</b></div>
+
  </div>
 </div>
 
@@ -67,8 +60,27 @@ window.addEventListener("error", function(ev){
 
 <script>
 const SUPABASE_URL="https://njvzlgcsizroyzfojlus.supabase.co";
-const SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5qdnpsZ2NzaXpyb3l6Zm9qbHVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc3NzMxNiwiZXhwIjoyMTAzMzUzMzE2fQ.b6aArILZS_aFHgri450Wh0bFH52J5kY3y3cLvUxRAag";
-const sb=supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
+const SUPABASE_PUBLISHABLE_KEY="sb_publishable_xQmUN-3dtvsSCtHgajN01w_siBAIw2F";
+let sb=null;
+function supabaseReady(){return !!SUPABASE_PUBLISHABLE_KEY}
+function createSupabase(){
+  if(!supabaseReady()) return null;
+  try{return supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}})}
+  catch(e){console.error(e);return null}
+}
+sb=createSupabase();
+function setupSupabase(){
+  modal(`<h2>Configurar conexión Supabase</h2>
+    <p class="muted">La clave anterior fue rechazada por Supabase. Pega aquí la <b>Publishable key</b> de este proyecto, normalmente empieza por <code>sb_publishable_</code>.</p>
+    <div class="field"><label>Publishable key</label><input id="supabaseKeyInput" placeholder="sb_publishable_..." autocomplete="off"></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cancelar</button><button class="btn primary" onclick="saveSupabaseKey()">Guardar y recargar</button></div>`);
+}
+function saveSupabaseKey(){
+  const k=($("#supabaseKeyInput")?.value||"").trim();
+  if(!k.startsWith("sb_publishable_")){toast("La Publishable key debe comenzar por sb_publishable_");return}
+  localStorage.setItem("mg_supabase_key",k);
+  location.reload();
+}
 const FACE_MODELS="https://cdn.jsdelivr.net/gh/vladmandic/face-api/model/";
 let roleSel="driver",session=JSON.parse(localStorage.getItem("mg_session")||"null"),page="home",gpsWatch=null,knownServices=new Set(),alertEnabled=false;
 
@@ -162,7 +174,7 @@ async function acceptService(sid){const d=current();const q=await sb.from("servi
 async function setOnline(on){const d=current();const status=on?"available":"offline";const q=await sb.from("drivers").update({online:on,status}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,online:on,status});render()}}
 async function driverCreateService(e){e.preventDefault();const f=new FormData(e.target),cat=f.get("category"),price=+f.get("price"),tip=+f.get("tip")||0;const d=current();const payload={driver_id:d.id,category:cat,customer_name:f.get("customer"),pickup_neighborhood:f.get("pickup_neighborhood"),pickup_address:f.get("pickup_address"),dropoff_neighborhood:f.get("dropoff_neighborhood"),dropoff_address:f.get("dropoff_address"),price,tip,notes:f.get("notes"),status:"in_progress",accepted_at:new Date().toISOString(),started_at:new Date().toISOString()};const q=await sb.from("services").insert(payload).select().single();if(q.error)toast(q.error.message);else{await sb.from("drivers").update({online:false,status:"busy",busy:true}).eq("id",d.id);toast("Servicio creado");render()}}
 async function savePaymentQR(){const d=current(),url=$("#paymentQr").value.trim();const q=await sb.from("profiles").update({payment_qr_url:url}).eq("id",d.id);if(q.error)toast(q.error.message);else{saveSession({...d,payment_qr_url:url});toast("QR guardado")}}
-async function categoryOptions(){const {data}=await sb.from("categories").select("id,name").eq("active",true).order("name");return (data||[]).map(x=>`<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("")}
+async function categoryOptions(){if(!sb)return "<option>Configura Supabase</option>";const {data}=await sb.from("categories").select("id,name").eq("active",true).order("name");return (data||[]).map(x=>`<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("")}
 
 /* ========================= CLIENT ========================= */
 async function renderClient(){
@@ -189,7 +201,7 @@ async function renderClient(){
  if(page==="chat"){const thread=await getAdminThread(c.id,"client");m.innerHTML=chatHTML(thread);bindChat(thread);return}
 }
 async function clientCount(idv){const q=await sb.from("services").select("*",{count:"exact",head:true}).eq("client_id",idv);return q.count||0}
-async function neighborhoodOptions(){const {data}=await sb.from("neighborhoods").select("name").eq("active",true).order("name");return (data||[]).map(x=>`<option>${esc(x.name)}</option>`).join("")}
+async function neighborhoodOptions(){if(!sb)return "";const {data}=await sb.from("neighborhoods").select("name").eq("active",true).order("name");return (data||[]).map(x=>`<option>${esc(x.name)}</option>`).join("")}
 async function previewFare(){const form=$("#main form");if(!form)return;const n=form.pickup_neighborhood.value,c=form.category.value,t=+form.tip.value||0;if(!n){$("#pricePreview").textContent=money(t);return}const {data}=await sb.from("fares").select("price").eq("active",true).ilike("neighborhood",n).ilike("category",c).limit(1).maybeSingle();$("#pricePreview").textContent=money((data?.price||0)+t)}
 function clientServiceCard(s){return `<div class="service light"><div class="title"><div><span class="tag">${esc(s.category)}</span><h3>${esc(s.customer_name||"Servicio")}</h3><div>${esc(s.pickup_neighborhood||"")} · ${esc(s.pickup_address||"")} → ${esc(s.dropoff_address||"")}</div></div><b>${money(s.total)}</b></div><div>Estado: <b>${esc(s.status)}</b></div>${s.driver_id?`<div class="row" style="margin-top:8px"><span>Código de validación: <b>${esc(s.validation_code||"")}</b></span><button class="btn" onclick="serviceDetail('${s.id}')">Seguimiento / chat</button></div>`:"<div class='muted' style='margin-top:8px'>Buscando conductor…</div>"}</div>`}
 async function createClientService(e){e.preventDefault();const f=new FormData(e.target),n=f.get("pickup_neighborhood"),c=f.get("category"),tip=+f.get("tip")||0;const {data:fare}=await sb.from("fares").select("price,category_id").eq("active",true).ilike("neighborhood",n).ilike("category",c).limit(1).maybeSingle();if(!fare){toast("No existe una tarifa para ese barrio/categoría");return}const me=current();const payload={client_id:me.id,category:c,category_id:fare.category_id,customer_name:f.get("customer_name"),customer_phone:me.phone,pickup_neighborhood:n,pickup_address:f.get("pickup_address"),dropoff_neighborhood:f.get("dropoff_neighborhood"),dropoff_address:f.get("dropoff_address"),price:+fare.price,tip,notes:f.get("notes"),status:"pending"};const q=await sb.from("services").insert(payload).select().single();if(q.error){toast(q.error.message);return}await ensureServiceThread(q.data.id,me.id,null,null);toast("Servicio creado. Buscando conductor…");startPendingTimer(q.data.id);nav("services")}
@@ -213,7 +225,7 @@ function adminServiceCard(s){return `<div class="card" style="margin:10px 0"><di
 async function availableDrivers(){const {data}=await sb.from("drivers").select("id,plate").eq("status","available").eq("online",true);return(data||[]).map(d=>`<option value="${d.id}">${esc(d.plate||d.id)}</option>`)}
 async function adminCreateService(){const catopts=await awaitCatOptions();modal(`<h2>Crear servicio admin</h2><form onsubmit="adminSubmit(event)" class="grid g2"><div class="field"><label>Categoría</label><select name="category">${catopts}</select></div><div class="field"><label>Cliente / nombre</label><input name="customer" required></div><div class="field"><label>Barrio recogida</label><input name="neighborhood" required></div><div class="field"><label>Dirección recogida</label><input name="pickup" required></div><div class="field"><label>Destino</label><input name="dropoff"></div><div class="field"><label>Valor</label><input name="price" type="number" required></div><button class="btn primary">Crear</button></form>`)}
 let cachedCats="";
-async function awaitCatOptions(){const {data}=await sb.from("categories").select("name").eq("active",true);return(data||[]).map(x=>`<option>${esc(x.name)}</option>`).join("")}
+async function awaitCatOptions(){if(!sb)return "";const {data}=await sb.from("categories").select("name").eq("active",true);return(data||[]).map(x=>`<option>${esc(x.name)}</option>`).join("")}
 async function adminSubmit(e){e.preventDefault();const f=new FormData(e.target);const {data,error}=await sb.from("services").insert({category:f.get("category"),customer_name:f.get("customer"),pickup_neighborhood:f.get("neighborhood"),pickup_address:f.get("pickup"),dropoff_address:f.get("dropoff"),price:+f.get("price"),status:"pending",created_by_admin_id:current().id}).select().single();if(error)toast(error.message);else{closeModal();toast("Servicio creado");render()}}
 async function assignAdmin(sid){const did=$(`#assign-${sid}`).value;if(!did)return toast("Selecciona conductor");const q=await sb.from("services").update({driver_id:did,status:"assigned"}).eq("id",sid);if(q.error)toast(q.error.message);else{await makeNotification(did,sid,"¡Nuevo servicio asignado!","Tienes un nuevo servicio pendiente.");toast("Servicio asignado");render()}}
 function newDriver(){modal(`<h2>Crear conductor</h2><form onsubmit="saveDriver(event)" class="grid g2">
@@ -264,7 +276,7 @@ async function renderServiceActions(s){const box=$("#serviceActions");if(!box)re
 async function finish(sid,withPayment){if(withPayment){modal(`<h2>Confirmar servicio</h2><p>No genera ningún cobro automático.</p><div class="row">${["cash","nequi","daviplata","transfer","other"].map(x=>`<button class="btn primary" onclick="complete('${sid}','${x}')">${x}</button>`).join("")}</div>`)}else complete(sid,"not_charged")}
 async function complete(sid,payment){const q=await sb.from("services").update({status:"completed",payment_method:payment,payment_confirmed:true}).eq("id",sid);if(q.error){toast(q.error.message);return}if(session.role==="driver")await sb.from("drivers").update({busy:false,online:true,status:"available"}).eq("id",session.id);closeModal();toast("Servicio terminado");render()}
 async function deliveryUpload(sid){const file=$("#deliveryFile").files[0];if(!file)return toast("Selecciona una foto");const url=await upload("delivery-photos",`${sid}/${Date.now()}-${file.name}`,file);const q=await sb.from("services").update({delivery_photo_url:url,delivery_photo_uploaded_at:new Date().toISOString()}).eq("id",sid);if(q.error)toast(q.error.message);else toast("Foto de entrega guardada")}
-async function fareRows(){const {data}=await sb.from("fares").select("*").eq("active",true).order("neighborhood");return (data||[]).map(f=>`<div class="row" style="justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)"><span><b>${esc(f.neighborhood)}</b> · ${esc(f.category)}</span><b>${money(f.price)}</b></div>`).join("")||"<div class='muted'>Sin tarifas.</div>"}
+async function fareRows(){if(!sb)return "<div class='muted'>Configura Supabase primero.</div>";const {data}=await sb.from("fares").select("*").eq("active",true).order("neighborhood");return (data||[]).map(f=>`<div class="row" style="justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)"><span><b>${esc(f.neighborhood)}</b> · ${esc(f.category)}</span><b>${money(f.price)}</b></div>`).join("")||"<div class='muted'>Sin tarifas.</div>"}
 async function fareFilter(q){const {data}=await sb.from("fares").select("*").eq("active",true).ilike("neighborhood",`%${q}%`).order("neighborhood");$("#fareList").innerHTML=(data||[]).map(f=>`<div class="row" style="justify-content:space-between;padding:9px;border-bottom:1px solid var(--line)"><span><b>${esc(f.neighborhood)}</b> · ${esc(f.category)}</span><b>${money(f.price)}</b></div>`).join("")}
 
 /* ========================= CHAT ========================= */
@@ -301,7 +313,19 @@ async function recover(){modal(`<h2>Recuperar contraseña</h2><div class="field"
 async function doRecover(){const v=$("#recoverInput").value.trim();const q=await sb.from("profiles").select("password_4,full_name,role").or(`document_number.eq.${v},email.eq.${v},phone.eq.${v}`).limit(1).maybeSingle();if(q.data)modal(`<h2>Contraseña encontrada</h2><p>${esc(q.data.full_name)}</p><div class="stat" style="text-align:center">${esc(q.data.password_4)}</div><button class="btn primary" onclick="navigator.clipboard?.writeText('${q.data.password_4}');closeModal()">Copiar y cerrar</button>`);else toast("No se encontró el usuario")}
 function registerClient(){modal(`<h2>Nuevo cliente</h2><form onsubmit="saveClient(event)" class="grid g2"><div class="field"><label>Nombre</label><input name="name" required></div><div class="field"><label>Documento</label><input name="document"></div><div class="field"><label>Correo</label><input name="email" type="email"></div><div class="field"><label>Celular</label><input name="phone"></div><button class="btn primary">Crear usuario</button></form>`)}
 async function saveClient(e){e.preventDefault();const f=new FormData(e.target),idv=id(),pass=rand4();if(!f.get("document")&&!f.get("email"))return toast("Documento o correo requerido");const p={id:idv,role:"client",full_name:f.get("name"),document_number:f.get("document")||null,email:f.get("email")||null,phone:f.get("phone")||null,password_4:pass,profile_code:rand3()};let q=await sb.from("profiles").insert(p);if(q.error)return toast(q.error.message);q=await sb.from("clients").insert({id:idv});if(q.error)return toast(q.error.message);modal(`<h2>Usuario creado</h2><p>Tu contraseña de 4 dígitos:</p><div class="stat" style="text-align:center">${pass}</div><button class="btn primary" onclick="navigator.clipboard?.writeText('${pass}');closeModal()">Copiar y cerrar</button>`)}
-async function start(){if(session){const q=await sb.from("profiles").select("*,drivers(*),clients(*)").eq("id",session.id).single();if(q.data){let r=q.data;if(session.role==="driver")r={...r,...(r.drivers||{})};if(session.role==="client")r={...r,...(r.clients||{})};session.record=r;localStorage.setItem("mg_session",JSON.stringify(session));openApp();return}}$("#login").classList.remove("hidden")}
+async function start(){
+ if(!sb){
+   $("#login").classList.remove("hidden");
+   const box=document.querySelector(".login-card");
+   if(box && !document.getElementById("supabaseSetupBtn")){
+     const b=document.createElement("button");
+     b.id="supabaseSetupBtn"; b.className="btn"; b.style.width="100%"; b.style.marginTop="12px";
+     b.textContent="✅ Supabase configurado"; b.disabled=true;
+     box.appendChild(b);
+   }
+   return;
+ }
+ if(session){const q=await sb.from("profiles").select("*,drivers(*),clients(*)").eq("id",session.id).single();if(q.data){let r=q.data;if(session.role==="driver")r={...r,...(r.drivers||{})};if(session.role==="client")r={...r,...(r.clients||{})};session.record=r;localStorage.setItem("mg_session",JSON.stringify(session));openApp();return}}$("#login").classList.remove("hidden")}
 start();
 </script>
 </body>
