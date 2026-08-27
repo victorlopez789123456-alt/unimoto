@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#101827">
-<title>MotoriGo</title>
+<title>UNIMOTO</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
@@ -29,7 +29,7 @@
 <body>
 <div id="login" class="login">
  <div class="login-card">
-  <div class="brand">Motori<b>Go</b></div>
+  <div class="brand">UNI<b>MOTO</b></div>
   <div class="muted">Servicios de mototaxi, pasajeros y entregas</div>
   <div class="roles">
    <button class="active" data-role="driver">Conductor</button>
@@ -45,14 +45,12 @@
    <button class="btn sm" onclick="recover()">Recuperar contraseña</button>
    <button class="btn sm" onclick="registerClient()">Nuevo cliente</button>
   </div>
-  <div class="card" style="margin-top:15px;background:#f8fafc"><b>Admin inicial</b><div class="small muted">Usuario: <b>admin</b> · Contraseña: <b>12</b></div></div>
-  <div class="small" style="margin-top:10px;color:#667085">URL: <b>njvzlgcsizroyzfojlus.supabase.co</b></div>
-
+  
  </div>
 </div>
 
 <div id="app" class="app hidden">
-<header class="top"><div class="brand">Motori<b>Go</b></div><div class="top-right"><span class="pill" id="rolePill"></span><span class="pill" id="userPill"></span><button class="btn sm" onclick="logout()">Salir</button></div></header>
+<header class="top"><div class="brand">UNI<b>MOTO</b></div><div class="top-right"><span class="pill" id="rolePill"></span><span class="pill" id="userPill"></span><button class="btn sm" onclick="logout()">Salir</button></div></header>
 <div class="layout"><aside class="side"><div id="nav" class="nav"></div></aside><main id="main" class="main"></main></div>
 </div>
 <div id="modal" class="modal hidden"><div id="modalBody" class="modal-card"></div></div>
@@ -155,8 +153,11 @@ async function renderDriver(){
  if(page==="fares"){m.innerHTML=`<div class="title"><h1>Tarifas</h1></div><div class="card"><input placeholder="Filtrar por barrio..." oninput="fareFilter(this.value)"><div id="fareList">${await fareRows()}</div></div>`;return}
  if(page==="profile"){
   const {data:p}=await sb.from("profiles").select("*").eq("id",d.id).single();saveSession({...d,...p});
+  const {data:drv}=await sb.from("drivers").select("face_descriptor").eq("id",d.id).maybeSingle();
+  const hasFace=!!drv?.face_descriptor?.length;
   m.innerHTML=`<div class="title"><h1>Mi perfil</h1></div><div class="grid g2"><div class="card"><h2>${esc(p.full_name)}</h2><div class="grid g2">${["phone","document_number","plate","model","bike_type"].map(k=>`<div><span class="muted small">${esc(k)}</span><br><b>${esc(p[k]||d[k]||"—")}</b></div>`).join("")}</div><hr class="hr"><label>QR para recibir pagos</label><input id="paymentQr" value="${esc(p.payment_qr_url||"")}" placeholder="URL o referencia del QR"><button class="btn primary" style="margin-top:8px" onclick="savePaymentQR()">Guardar</button></div>
-  <div class="card"><h2>QR de identificación</h2><img id="driverQrImage" class="qr" alt="QR del conductor"><div class="small muted" style="text-align:center">Código alterno: <b>${esc(p.profile_code||"")}</b></div></div></div>`;
+  <div class="card"><h2>QR de identificación</h2><img id="driverQrImage" class="qr" alt="QR del conductor"><div class="small muted" style="text-align:center">Código alterno: <b>${esc(p.profile_code||"")}</b></div></div>
+  <div class="card"><h2>Reconocimiento facial</h2><p class="muted small">${hasFace?"Ya tienes un rostro registrado. Puedes actualizarlo si cambia tu apariencia (lentes, barba, etc.).":"Aún no has registrado tu rostro. Es necesario para la verificación diaria."}</p><button class="btn primary" onclick="registerFace('${d.id}')">${hasFace?"Actualizar mi rostro":"Registrar mi rostro"}</button></div></div>`;
   renderDriverQr(d.id,p.profile_code);return;
  }
  if(page==="history"){
@@ -261,7 +262,7 @@ ${[["full_name","Nombres y apellidos"],["phone","Celular"],["plate","Placa"],["m
 <button class="btn primary" style="grid-column:1/-1">Crear y generar contraseña</button></form><p class="small muted">La lista incluye Boxer, MRX, XLR, NKD y otros tipos/modelos; puedes escribir cualquier referencia.</p>`)}
 async function saveDriver(e){e.preventDefault();const f=new FormData(e.target),did=id(),pass=rand4();const profile={id:did,role:"driver",full_name:f.get("full_name"),phone:f.get("phone"),document_number:f.get("document_number"),username:f.get("phone"),password_4:pass,profile_code:rand3()};let photoUrl="";const photo=f.get("photo");if(photo?.size)photoUrl=await upload("driver-photos",did,photo);profile.avatar_url=photoUrl||null;let q=await sb.from("profiles").insert(profile);if(q.error){toast(q.error.message);return}q=await sb.from("drivers").insert({id:did,plate:f.get("plate"),model:f.get("model"),bike_type:f.get("bike_type"),approved:false});if(q.error){toast(q.error.message);return}for(const [key,type] of [["license","licencia_transito"],["property","tarjeta_propiedad"],["idfile","cedula"],["soat","soat"],["techno","tecnomecanica"]]){const file=f.get(key);if(file?.size){const url=await upload("driver-documents",`${did}/${type}-${Date.now()}-${file.name}`,file);if(url)await sb.from("driver_documents").insert({driver_id:did,document_type:type,file_url:url})}}showCredentials(profile)}
 function showCredentials(d){
- const msg=encodeURIComponent(`MotoriGo - Usuario: ${d.username} - Contraseña: ${d.password_4}`);
+ const msg=encodeURIComponent(`UNIMOTO - Usuario: ${d.username} - Contraseña: ${d.password_4}`);
  const wa=`https://wa.me/${String(d.phone||"").replace(/\\D/g,"")}?text=${msg}`;
  modal(`<h2>Conductor creado</h2><p>Usuario: <b>${esc(d.username)}</b></p><div class="stat" style="text-align:center">${esc(d.password_4)}</div><div class="row" style="justify-content:flex-end"><button class="btn" onclick="navigator.clipboard?.writeText('${d.password_4}');toast('Contraseña copiada')">Copiar</button><a class="btn ok" href="${wa}" target="_blank" rel="noopener">Abrir WhatsApp</a><button class="btn primary" onclick="closeModal()">Cerrar</button></div><p class="small muted">WhatsApp se abre con el mensaje preparado; el envío automático requiere una API empresarial con credenciales de servidor.</p>`)
 }
@@ -342,8 +343,32 @@ function stopModalCamera(){if(cameraStream){cameraStream.getTracks().forEach(x=>
 async function loadFaceModels(){await Promise.all([faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS),faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS),faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS)])}
 async function checkFaceDaily(){const d=current();if(!d.approved){toast("Tu cuenta aún no ha sido aprobada por el administrador.");return}const day=new Date().toISOString().slice(0,10);if(d.last_face_auth_at?.slice(0,10)===day)return;modal(`<h2>Autenticación facial diaria</h2><p>Debes verificar tu rostro una vez al día antes de operar.</p><video id="faceVideo" autoplay playsinline></video><div id="faceMsg" class="muted">Cargando modelos…</div><div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn primary" id="faceVerify" disabled onclick="verifyFace()">Verificar</button></div>`);try{await loadFaceModels();cameraStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});$("#faceVideo").srcObject=cameraStream;$("#faceMsg").textContent="Cámara lista.";$("#faceVerify").disabled=false}catch(e){$("#faceMsg").textContent="No se pudo iniciar: "+e.message}}
 async function verifyFace(){const d=current(),v=$("#faceVideo");try{const r=await faceapi.detectSingleFace(v,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();if(!r){$("#faceMsg").textContent="No se detectó un rostro.";return}const desc=Array.from(r.descriptor);let distance=null;if(d.face_descriptor?.length){distance=faceapi.euclideanDistance(new Float32Array(d.face_descriptor),new Float32Array(desc));if(distance>.58){await sb.from("face_auth_logs").insert({driver_id:d.id,success:false,distance,device_info:navigator.userAgent});$("#faceMsg").textContent=`Rostro no coincide (${distance.toFixed(3)}).`;return}}else{$("#faceMsg").textContent="No existe preregistro facial. Solicita al administrador que registre tu rostro.";return}const now=new Date().toISOString();await sb.from("drivers").update({last_face_auth_at:now}).eq("id",d.id);await sb.from("face_auth_logs").insert({driver_id:d.id,success:true,distance,device_info:navigator.userAgent});saveSession({...d,last_face_auth_at:now});$("#faceMsg").textContent="Rostro validado.";setTimeout(closeModal,700)}catch(e){$("#faceMsg").textContent=e.message}}
-async function registerFace(idv){modal(`<h2>Preregistro facial</h2><p>Ubica el rostro del conductor frente a la cámara.</p><video id="regFaceVideo" autoplay playsinline></video><div id="regMsg">Cargando…</div><div class="row" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">Cerrar</button><button class="btn primary" id="regBtn" disabled onclick="captureFace('${idv}')">Registrar rostro</button></div>`);try{await loadFaceModels();cameraStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});$("#regFaceVideo").srcObject=cameraStream;$("#regBtn").disabled=false;$("#regMsg").textContent="Cámara lista."}catch(e){$("#regMsg").textContent=e.message}}
+function registerFace(idv){
+ modal(`<h2>Preregistro facial</h2>
+ <p class="muted">Puedes usar la cámara en vivo o precargar una foto (subida o tomada con la cámara del dispositivo).</p>
+ <div class="row" style="margin-bottom:10px"><button class="btn" id="regTabCam" onclick="regSwitchTab('cam','${idv}')">📷 Usar cámara en vivo</button><button class="btn" id="regTabFile" onclick="regSwitchTab('file','${idv}')">🖼️ Subir / tomar foto</button></div>
+ <div id="regTabBody"></div>
+ <div id="regMsg" class="muted">Cargando…</div>
+ <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" onclick="closeModal()">Cerrar</button></div>`);
+ regSwitchTab('cam',idv);
+}
+async function regSwitchTab(mode,idv){
+ stopModalCamera();
+ const body=$("#regTabBody");if(!body)return;
+ if(mode==="cam"){
+  body.innerHTML=`<video id="regFaceVideo" autoplay playsinline></video><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn primary" id="regBtn" disabled onclick="captureFace('${idv}')">Registrar rostro</button></div>`;
+  try{await loadFaceModels();cameraStream=await navigator.mediaDevices.getUserMedia({video:true,audio:false});$("#regFaceVideo").srcObject=cameraStream;$("#regBtn").disabled=false;$("#regMsg").textContent="Cámara lista."}catch(e){$("#regMsg").textContent=e.message}
+ }else{
+  body.innerHTML=`<div class="field"><label>Foto del rostro</label><input id="regFaceFile" type="file" accept="image/*" capture="user"></div><img id="regFacePreview" style="max-width:100%;border-radius:14px;display:none"><div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn primary" id="regBtnFile" disabled onclick="captureFaceFromFile('${idv}')">Registrar rostro</button></div>`;
+  try{await loadFaceModels();$("#regMsg").textContent="Selecciona una foto de tu galería o tómala con la cámara."}catch(e){$("#regMsg").textContent=e.message}
+  $("#regFaceFile").addEventListener("change",e=>{
+   const file=e.target.files[0];if(!file)return;
+   const img=$("#regFacePreview");img.onload=()=>{$("#regBtnFile").disabled=false;$("#regMsg").textContent="Foto cargada."};img.src=URL.createObjectURL(file);img.style.display="block";
+  });
+ }
+}
 async function captureFace(idv){const v=$("#regFaceVideo");const r=await faceapi.detectSingleFace(v,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();if(!r)return $("#regMsg").textContent="No se detectó rostro.";const q=await sb.from("drivers").update({face_descriptor:Array.from(r.descriptor)}).eq("id",idv);if(q.error)$("#regMsg").textContent=q.error.message;else{toast("Preregistro facial guardado");closeModal()}}
+async function captureFaceFromFile(idv){const img=$("#regFacePreview");if(!img||!img.src)return;const r=await faceapi.detectSingleFace(img,new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();if(!r)return $("#regMsg").textContent="No se detectó un rostro en la foto. Intenta con otra imagen, con buena luz y de frente.";const q=await sb.from("drivers").update({face_descriptor:Array.from(r.descriptor)}).eq("id",idv);if(q.error)$("#regMsg").textContent=q.error.message;else{toast("Preregistro facial guardado");closeModal();render()}}
 
 /* ========================= UTILIDADES ========================= */
 async function upload(bucket,path,file){const q=await sb.storage.from(bucket).upload(path,file,{upsert:true});if(q.error){toast(q.error.message);return null}const {data}=sb.storage.from(bucket).getPublicUrl(path);return data?.publicUrl||null}
